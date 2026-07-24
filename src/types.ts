@@ -8,10 +8,16 @@ export interface MenuItem {
   created_at: string;
 }
 
+export type OrderStatus = 'Being Prepared' | 'Served' | 'Cancelled';
+
 export interface Order {
   id: string;
+  subtotal?: number;
+  discount_percent?: number;
+  discount_amount?: number;
   total_amount: number;
   payment_method: 'cash' | 'card';
+  status: OrderStatus;
   created_at: string;
 }
 

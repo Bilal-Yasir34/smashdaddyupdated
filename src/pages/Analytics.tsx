@@ -64,12 +64,14 @@ export default function Analytics({ onLogout, onNavigate, activeTab }: Analytics
   }
 
   const periodStart = getStartOfPeriod(period);
-  const filteredOrders = orders.filter((o) => new Date(o.created_at) >= periodStart);
-  const filteredOrderIds = new Set(filteredOrders.map((o) => o.id));
-  const filteredItems = orderItems.filter((oi) => filteredOrderIds.has(oi.order_id));
+  const periodOrders = orders.filter((o) => new Date(o.created_at) >= periodStart);
+  // Revenue is only registered after order status is updated to Served
+  const servedOrders = periodOrders.filter((o) => !o.status || o.status === 'Served');
+  const servedOrderIds = new Set(servedOrders.map((o) => o.id));
+  const filteredItems = orderItems.filter((oi) => servedOrderIds.has(oi.order_id));
 
-  const totalRevenue = filteredOrders.reduce((s, o) => s + Number(o.total_amount), 0);
-  const totalOrders = filteredOrders.length;
+  const totalRevenue = servedOrders.reduce((s, o) => s + Number(o.total_amount), 0);
+  const totalOrders = servedOrders.length;
   const totalItemsSold = filteredItems.reduce((s, oi) => s + oi.quantity, 0);
 
   // Per-item aggregation
@@ -83,10 +85,10 @@ export default function Analytics({ onLogout, onNavigate, activeTab }: Analytics
   const itemsSold = [...itemMap.values()].sort((a, b) => b.total_qty - a.total_qty);
 
   // Payment breakdown
-  const cashRevenue = filteredOrders
+  const cashRevenue = servedOrders
     .filter((o) => o.payment_method === 'cash')
     .reduce((s, o) => s + Number(o.total_amount), 0);
-  const cardRevenue = filteredOrders
+  const cardRevenue = servedOrders
     .filter((o) => o.payment_method === 'card')
     .reduce((s, o) => s + Number(o.total_amount), 0);
 
@@ -286,32 +288,55 @@ export default function Analytics({ onLogout, onNavigate, activeTab }: Analytics
               <h2 className="text-lg font-bold mb-3 flex items-center gap-2">
                 <Calendar size={20} className="text-yellow-400" /> Recent Orders ({periodLabel})
               </h2>
-              {filteredOrders.length === 0 ? (
+              {periodOrders.length === 0 ? (
                 <p className="text-zinc-500 text-sm bg-zinc-900 border border-zinc-800 rounded-xl p-6 text-center">
                   No orders in this period.
                 </p>
               ) : (
                 <div className="space-y-2">
-                  {filteredOrders.slice(0, 20).map((o) => (
-                    <div
-                      key={o.id}
-                      className="flex items-center justify-between bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3 animate-[fadeIn_0.3s_ease-out]"
-                    >
-                      <div>
-                        <p className="font-medium">{formatPKR(Number(o.total_amount))}</p>
-                        <p className="text-zinc-500 text-xs">{formatDateTime(o.created_at)}</p>
-                      </div>
-                      <span
-                        className={`text-xs font-medium px-2.5 py-1 rounded-full ${
-                          o.payment_method === 'cash'
-                            ? 'bg-green-500/10 text-green-400'
-                            : 'bg-blue-500/10 text-blue-400'
-                        }`}
+                  {periodOrders.slice(0, 20).map((o) => {
+                    const st = o.status || 'Being Prepared';
+                    return (
+                      <div
+                        key={o.id}
+                        className="flex items-center justify-between bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3 animate-[fadeIn_0.3s_ease-out]"
                       >
-                        {o.payment_method === 'cash' ? 'Cash' : 'Card / Online'}
-                      </span>
-                    </div>
-                  ))}
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <p className="font-medium">{formatPKR(Number(o.total_amount))}</p>
+                            {o.discount_percent && o.discount_percent > 0 ? (
+                              <span className="text-[10px] font-bold bg-green-500/10 text-green-400 border border-green-500/20 px-1.5 py-0.5 rounded">
+                                {o.discount_percent}% OFF
+                              </span>
+                            ) : null}
+                          </div>
+                          <p className="text-zinc-500 text-xs">{formatDateTime(o.created_at)}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
+                              st === 'Served'
+                                ? 'bg-green-500/10 text-green-400 border border-green-500/20'
+                                : st === 'Being Prepared'
+                                  ? 'bg-yellow-400/10 text-yellow-400 border border-yellow-400/20'
+                                  : 'bg-red-500/10 text-red-400 border border-red-500/20'
+                            }`}
+                          >
+                            {st}
+                          </span>
+                          <span
+                            className={`text-xs font-medium px-2.5 py-1 rounded-full ${
+                              o.payment_method === 'cash'
+                                ? 'bg-zinc-800 text-zinc-300'
+                                : 'bg-blue-500/10 text-blue-400'
+                            }`}
+                          >
+                            {o.payment_method === 'cash' ? 'Cash' : 'Card'}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
