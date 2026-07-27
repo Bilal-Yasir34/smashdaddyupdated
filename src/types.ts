@@ -18,6 +18,7 @@ export interface Order {
   total_amount: number;
   payment_method: 'cash' | 'card';
   status: OrderStatus;
+  instructions?: string | null;
   created_at: string;
 }
 

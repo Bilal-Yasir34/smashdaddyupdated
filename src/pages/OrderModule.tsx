@@ -20,6 +20,7 @@ import {
   CheckCircle,
   XCircle,
   RefreshCw,
+  FileText,
 } from 'lucide-react';
 import Logo from '../components/Logo';
 import Modal from '../components/Modal';
@@ -43,6 +44,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
   const [cart, setCart] = useState<CartLine[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
   const [discountPercent, setDiscountPercent] = useState<number>(0);
+  const [orderInstructions, setOrderInstructions] = useState<string>('');
   const [checkoutStep, setCheckoutStep] = useState<CheckoutStep>('cart');
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | null>(null);
   const [placing, setPlacing] = useState(false);
@@ -54,6 +56,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
     total: number;
     method: 'cash' | 'card';
     lines: CartLine[];
+    instructions?: string | null;
     timestamp: string;
   } | null>(null);
 
@@ -177,13 +180,39 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
       discount_amount: discountAmount,
       payment_method: paymentMethod,
       status: 'Being Prepared',
+      instructions: orderInstructions.trim() || null,
     };
 
     let orderRes = await supabase.from('orders').insert(fullPayload).select().single();
 
-    // Fallback if subtotal/discount/status columns don't exist in remote schema yet
+    // Fallback 1: Try without instructions if DB schema lacks 'instructions' column
     if (orderRes.error) {
-      console.warn('Primary insert failed, attempting fallback payload:', orderRes.error);
+      console.warn('Full payload insert failed, trying without instructions:', orderRes.error);
+      const { instructions, ...payloadWithoutInstructions } = fullPayload;
+      orderRes = await supabase
+        .from('orders')
+        .insert(payloadWithoutInstructions)
+        .select()
+        .single();
+    }
+
+    // Fallback 2: Try basic payload with status if discount columns don't exist
+    if (orderRes.error) {
+      console.warn('Payload without instructions failed, trying basic payload:', orderRes.error);
+      orderRes = await supabase
+        .from('orders')
+        .insert({
+          total_amount: cartTotal,
+          payment_method: paymentMethod,
+          status: 'Being Prepared',
+        })
+        .select()
+        .single();
+    }
+
+    // Fallback 3: Minimum payload
+    if (orderRes.error) {
+      console.warn('Basic payload failed, attempting minimum payload:', orderRes.error);
       orderRes = await supabase
         .from('orders')
         .insert({
@@ -220,6 +249,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
       total: cartTotal,
       method: paymentMethod,
       lines: cart,
+      instructions: orderInstructions.trim() || null,
       timestamp: order.created_at || new Date().toISOString(),
     });
     setPlacing(false);
@@ -229,6 +259,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
   function resetOrder() {
     setCart([]);
     setDiscountPercent(0);
+    setOrderInstructions('');
     setReceipt(null);
     setPaymentMethod(null);
     setCheckoutStep('cart');
@@ -568,6 +599,31 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                   </div>
                 </div>
 
+                {/* Order Instructions Section */}
+                <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+                      <FileText size={14} className="text-yellow-400" /> Order Instructions
+                    </label>
+                    {orderInstructions.trim() && (
+                      <button
+                        type="button"
+                        onClick={() => setOrderInstructions('')}
+                        className="text-[10px] text-zinc-500 hover:text-red-400 transition-colors font-medium"
+                      >
+                        Clear instructions
+                      </button>
+                    )}
+                  </div>
+                  <textarea
+                    value={orderInstructions}
+                    onChange={(e) => setOrderInstructions(e.target.value)}
+                    placeholder="Add order instructions (e.g. Extra spicy, no onions, sauce on side)..."
+                    rows={2}
+                    className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-2.5 text-xs text-white placeholder-zinc-600 focus:border-yellow-400 outline-none transition-colors resize-none"
+                  />
+                </div>
+
                 {/* Price Breakdown */}
                 <div className="border-t border-zinc-800 pt-3 space-y-1.5">
                   <div className="flex justify-between text-sm text-zinc-400">
@@ -734,6 +790,18 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                 ))}
               </div>
 
+              {/* Order Instructions (Visible only if instructions exist) */}
+              {receipt.instructions && receipt.instructions.trim().length > 0 && (
+                <div className="my-2.5 p-2 bg-zinc-100 border border-zinc-300 rounded-lg font-sans text-xs">
+                  <p className="font-bold text-[10px] uppercase text-zinc-800 tracking-wider mb-0.5">
+                    ORDER INSTRUCTIONS:
+                  </p>
+                  <p className="text-zinc-900 font-medium whitespace-pre-wrap leading-tight">
+                    {receipt.instructions.trim()}
+                  </p>
+                </div>
+              )}
+
               <div className="border-t-2 border-dashed border-black my-2" />
 
               {/* Financial Summary */}
@@ -839,6 +907,32 @@ function KDSCard({
 }) {
   const status = order.status || 'Being Prepared';
 
+  // Calculate dynamic subtotal & discount fallbacks from line items if DB fields are missing
+  const computedItemsSubtotal = order.items.reduce(
+    (acc, item) => acc + Number(item.item_price || 0) * (item.quantity || 1),
+    0,
+  );
+  const displaySubtotal =
+    order.subtotal && Number(order.subtotal) > 0
+      ? Number(order.subtotal)
+      : computedItemsSubtotal > 0
+        ? computedItemsSubtotal
+        : order.total_amount;
+
+  const displayDiscountAmount =
+    order.discount_amount && Number(order.discount_amount) > 0
+      ? Number(order.discount_amount)
+      : displaySubtotal > order.total_amount
+        ? displaySubtotal - order.total_amount
+        : 0;
+
+  const displayDiscountPercent =
+    order.discount_percent && Number(order.discount_percent) > 0
+      ? Number(order.discount_percent)
+      : displaySubtotal > 0 && displayDiscountAmount > 0
+        ? Math.round((displayDiscountAmount / displaySubtotal) * 100)
+        : 0;
+
   // Calculate 25-minute moving countdown timer
   const createdMs = new Date(order.created_at).getTime();
   const targetMs = createdMs + 25 * 60 * 1000; // 25 mins target
@@ -931,21 +1025,35 @@ function KDSCard({
             ))
           )}
         </div>
+
+        {/* Order Instructions in KDS */}
+        {order.instructions && order.instructions.trim().length > 0 && (
+          <div className="bg-yellow-400/10 border border-yellow-400/30 rounded-xl p-2.5 mb-3 text-xs">
+            <span className="font-bold text-yellow-400 text-[10px] uppercase tracking-wider block mb-0.5">
+              Special Instructions:
+            </span>
+            <p className="text-zinc-200 font-medium whitespace-pre-wrap">
+              {order.instructions.trim()}
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Card Footer & Financial Summary */}
       <div className="pt-3 border-t border-zinc-800 space-y-3">
         <div className="space-y-0.5 text-xs text-zinc-400">
-          {order.subtotal && order.subtotal !== order.total_amount && (
+          {displaySubtotal > 0 && (displaySubtotal !== order.total_amount || displayDiscountAmount > 0) && (
             <div className="flex justify-between">
               <span>Subtotal</span>
-              <span>{formatPKR(order.subtotal)}</span>
+              <span>{formatPKR(displaySubtotal)}</span>
             </div>
           )}
-          {order.discount_percent && order.discount_percent > 0 ? (
+          {displayDiscountAmount > 0 ? (
             <div className="flex justify-between text-green-400">
-              <span>Discount ({order.discount_percent}%)</span>
-              <span>-{formatPKR(order.discount_amount || 0)}</span>
+              <span>
+                Discount {displayDiscountPercent > 0 ? `(${displayDiscountPercent}%)` : ''}
+              </span>
+              <span>-{formatPKR(displayDiscountAmount)}</span>
             </div>
           ) : null}
           <div className="flex justify-between text-sm font-bold text-white pt-1">
