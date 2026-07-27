@@ -6,7 +6,7 @@ import { TrendingUp, ShoppingBag, Receipt, Trash2, Calendar, AlertTriangle } fro
 import Modal from '../components/Modal';
 import { CLEAR_SALES_PASSWORD } from '../lib/auth';
 
-type Period = 'day' | 'week' | 'month' | 'year';
+type Period = 'day' | 'week' | 'month' | 'year' | 'custom';
 
 interface AnalyticsProps {
   onLogout: () => void;
@@ -22,6 +22,14 @@ interface ItemSold {
 
 export default function Analytics({ onLogout, onNavigate, activeTab }: AnalyticsProps) {
   const [period, setPeriod] = useState<Period>('day');
+  const [startDate, setStartDate] = useState<string>(() => {
+    const d = new Date();
+    return d.toISOString().split('T')[0];
+  });
+  const [endDate, setEndDate] = useState<string>(() => {
+    const d = new Date();
+    return d.toISOString().split('T')[0];
+  });
   const [orders, setOrders] = useState<Order[]>([]);
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -63,8 +71,23 @@ export default function Analytics({ onLogout, onNavigate, activeTab }: Analytics
     return start;
   }
 
-  const periodStart = getStartOfPeriod(period);
-  const periodOrders = orders.filter((o) => new Date(o.created_at) >= periodStart);
+  let periodOrders: Order[] = [];
+  if (period === 'custom') {
+    const start = new Date(startDate);
+    start.setHours(0, 0, 0, 0);
+
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+
+    periodOrders = orders.filter((o) => {
+      const created = new Date(o.created_at);
+      return created >= start && created <= end;
+    });
+  } else {
+    const periodStart = getStartOfPeriod(period);
+    periodOrders = orders.filter((o) => new Date(o.created_at) >= periodStart);
+  }
+
   // Revenue is only registered after order status is updated to Served
   const servedOrders = periodOrders.filter((o) => !o.status || o.status === 'Served');
   const servedOrderIds = new Set(servedOrders.map((o) => o.id));
@@ -113,8 +136,9 @@ export default function Analytics({ onLogout, onNavigate, activeTab }: Analytics
     week: 'This Week',
     month: 'This Month',
     year: 'This Year',
+    custom: 'Custom Range',
   };
-  const periodLabel = periodLabels[period];
+  const periodLabel = period === 'custom' ? `${startDate} to ${endDate}` : periodLabels[period];
 
   return (
     <div className="min-h-screen bg-zinc-950 text-white">
@@ -172,20 +196,52 @@ export default function Analytics({ onLogout, onNavigate, activeTab }: Analytics
         </div>
 
         {/* Period selector */}
-        <div className="flex gap-2 mb-6 overflow-x-auto pb-1">
-          {(['day', 'week', 'month', 'year'] as Period[]).map((p) => (
-            <button
-              key={p}
-              onClick={() => setPeriod(p)}
-              className={`px-4 py-2 rounded-xl text-sm font-medium whitespace-nowrap transition-all ${
-                period === p
-                  ? 'bg-yellow-400 text-black'
-                  : 'bg-zinc-900 text-zinc-400 hover:text-white border border-zinc-800'
-              }`}
-            >
-              {periodLabels[p]}
-            </button>
-          ))}
+        <div className="flex flex-col gap-3 mb-6">
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {(['day', 'week', 'month', 'year', 'custom'] as Period[]).map((p) => (
+              <button
+                key={p}
+                onClick={() => setPeriod(p)}
+                className={`px-4 py-2 rounded-xl text-sm font-medium whitespace-nowrap transition-all ${
+                  period === p
+                    ? 'bg-yellow-400 text-black shadow-md shadow-yellow-400/10 font-bold'
+                    : 'bg-zinc-900 text-zinc-400 hover:text-white border border-zinc-800'
+                }`}
+              >
+                {periodLabels[p]}
+              </button>
+            ))}
+          </div>
+
+          {/* Custom Date Range Picker Bar */}
+          {period === 'custom' && (
+            <div className="bg-zinc-900 border border-zinc-800/90 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center gap-4 animate-[fadeIn_0.2s_ease-out]">
+              <div className="flex items-center gap-2 text-sm text-zinc-300">
+                <Calendar size={18} className="text-yellow-400 shrink-0" />
+                <span className="font-semibold">Custom Date Filter:</span>
+              </div>
+              <div className="flex items-center gap-3 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-zinc-400">From:</label>
+                  <input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-white focus:border-yellow-400 outline-none"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-zinc-400">To:</label>
+                  <input
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-white focus:border-yellow-400 outline-none"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {loading ? (

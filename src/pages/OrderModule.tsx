@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
-import type { MenuItem, CartLine, Order, OrderItem, OrderStatus } from '../types';
+import type { MenuItem, CartLine, Order, OrderItem, OrderStatus, OrderType } from '../types';
 import { formatPKR, formatDateTime } from '../lib/format';
 import {
   Search,
@@ -21,6 +21,11 @@ import {
   XCircle,
   RefreshCw,
   FileText,
+  User,
+  UtensilsCrossed,
+  ShoppingBag,
+  Pencil,
+  Trash2,
 } from 'lucide-react';
 import Logo from '../components/Logo';
 import Modal from '../components/Modal';
@@ -36,6 +41,15 @@ interface KDSOrder extends Order {
   items: OrderItem[];
 }
 
+export function formatOrderDisplayNumber(order: { id: string; order_number?: string | null } | null | undefined): string {
+  if (!order) return 'SD-1001';
+  if (order.order_number && order.order_number.trim()) {
+    return order.order_number.trim();
+  }
+  const shortId = order.id.slice(0, 4).toUpperCase();
+  return `SD-${shortId}`;
+}
+
 export default function OrderModule({ onBack }: OrderModuleProps) {
   const [activeSection, setActiveSection] = useState<PortalSection>('menu');
   const [items, setItems] = useState<MenuItem[]>([]);
@@ -45,11 +59,14 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
   const [cartOpen, setCartOpen] = useState(false);
   const [discountPercent, setDiscountPercent] = useState<number>(0);
   const [orderInstructions, setOrderInstructions] = useState<string>('');
+  const [customerName, setCustomerName] = useState<string>('');
+  const [orderType, setOrderType] = useState<OrderType>('Dine In');
   const [checkoutStep, setCheckoutStep] = useState<CheckoutStep>('cart');
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | null>(null);
   const [placing, setPlacing] = useState(false);
   const [receipt, setReceipt] = useState<{
     orderId: string;
+    orderNumber: string;
     subtotal: number;
     discountPercent: number;
     discountAmount: number;
@@ -57,6 +74,8 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
     method: 'cash' | 'card';
     lines: CartLine[];
     instructions?: string | null;
+    customerName?: string | null;
+    orderType: OrderType;
     timestamp: string;
   } | null>(null);
 
@@ -65,6 +84,23 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
   const [kdsLoading, setKdsLoading] = useState(false);
   const [kdsFilter, setKdsFilter] = useState<OrderStatus | 'All'>('Being Prepared');
   const [nowMs, setNowMs] = useState<number>(Date.now());
+
+  // KDS Edit Order State
+  const [editingOrder, setEditingOrder] = useState<KDSOrder | null>(null);
+  const [editItems, setEditItems] = useState<
+    Array<{ id?: string; menu_item_id: string | null; item_name: string; item_price: number; quantity: number }>
+  >([]);
+  const [editCustomerName, setEditCustomerName] = useState<string>('');
+  const [editOrderType, setEditOrderType] = useState<OrderType>('Dine In');
+  const [editInstructions, setEditInstructions] = useState<string>('');
+  const [editDiscountPercent, setEditDiscountPercent] = useState<number>(0);
+  const [editPaymentMethod, setEditPaymentMethod] = useState<'cash' | 'card'>('cash');
+  const [editSaving, setEditSaving] = useState<boolean>(false);
+  const [selectedAddItem, setSelectedAddItem] = useState<string>('');
+
+  // Delete Order State
+  const [deletingOrder, setDeletingOrder] = useState<KDSOrder | null>(null);
+  const [deleting, setDeleting] = useState<boolean>(false);
 
   // Ticker for KDS 25-minute countdown (updates every 1 second)
   useEffect(() => {
@@ -173,6 +209,32 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
     if (!paymentMethod || cart.length === 0) return;
     setPlacing(true);
 
+    let nextOrderNumber = 'SD-1001';
+    try {
+      const { data: latestData } = await supabase
+        .from('orders')
+        .select('order_number, created_at')
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (latestData && latestData.length > 0 && latestData[0].order_number) {
+        const match = latestData[0].order_number.match(/SD-(\d+)/i);
+        if (match && match[1]) {
+          const num = parseInt(match[1], 10);
+          if (!isNaN(num)) {
+            nextOrderNumber = `SD-${num + 1}`;
+          }
+        }
+      } else {
+        const { count } = await supabase.from('orders').select('*', { count: 'exact', head: true });
+        if (count && count > 0) {
+          nextOrderNumber = `SD-${1000 + count + 1}`;
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to compute next order number:', e);
+    }
+
     const fullPayload = {
       total_amount: cartTotal,
       subtotal: subtotal,
@@ -181,22 +243,47 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
       payment_method: paymentMethod,
       status: 'Being Prepared',
       instructions: orderInstructions.trim() || null,
+      customer_name: customerName.trim() || null,
+      order_type: orderType,
+      order_number: nextOrderNumber,
     };
 
     let orderRes = await supabase.from('orders').insert(fullPayload).select().single();
 
-    // Fallback 1: Try without instructions if DB schema lacks 'instructions' column
+    // Fallback 1: Try without order_number if DB schema lacks 'order_number' column
     if (orderRes.error) {
-      console.warn('Full payload insert failed, trying without instructions:', orderRes.error);
-      const { instructions, ...payloadWithoutInstructions } = fullPayload;
+      console.warn('Full payload insert failed, trying without order_number:', orderRes.error);
+      const { order_number, ...payloadWithoutOrderNumber } = fullPayload;
       orderRes = await supabase
         .from('orders')
-        .insert(payloadWithoutInstructions)
+        .insert(payloadWithoutOrderNumber)
         .select()
         .single();
     }
 
-    // Fallback 2: Try basic payload with status if discount columns don't exist
+    // Fallback 2: Try without order_type if DB schema lacks 'order_type' column
+    if (orderRes.error) {
+      console.warn('Insert failed, trying without order_type:', orderRes.error);
+      const { order_type, order_number, ...payloadWithoutOrderType } = fullPayload;
+      orderRes = await supabase
+        .from('orders')
+        .insert(payloadWithoutOrderType)
+        .select()
+        .single();
+    }
+
+    // Fallback 3: Try without customer_name if DB schema lacks 'customer_name' column
+    if (orderRes.error) {
+      console.warn('Insert failed, trying without customer_name:', orderRes.error);
+      const { customer_name, order_type, order_number, ...payloadWithoutCustomerName } = fullPayload;
+      orderRes = await supabase
+        .from('orders')
+        .insert(payloadWithoutCustomerName)
+        .select()
+        .single();
+    }
+
+    // Fallback 4: Try basic payload with status if discount columns don't exist
     if (orderRes.error) {
       console.warn('Payload without instructions failed, trying basic payload:', orderRes.error);
       orderRes = await supabase
@@ -210,7 +297,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
         .single();
     }
 
-    // Fallback 3: Minimum payload
+    // Fallback 5: Minimum payload
     if (orderRes.error) {
       console.warn('Basic payload failed, attempting minimum payload:', orderRes.error);
       orderRes = await supabase
@@ -243,6 +330,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
 
     setReceipt({
       orderId: order.id,
+      orderNumber: order.order_number || nextOrderNumber,
       subtotal: subtotal,
       discountPercent: validDiscountPercent,
       discountAmount: discountAmount,
@@ -250,6 +338,8 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
       method: paymentMethod,
       lines: cart,
       instructions: orderInstructions.trim() || null,
+      customerName: customerName.trim() || null,
+      orderType: orderType,
       timestamp: order.created_at || new Date().toISOString(),
     });
     setPlacing(false);
@@ -260,6 +350,8 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
     setCart([]);
     setDiscountPercent(0);
     setOrderInstructions('');
+    setCustomerName('');
+    setOrderType('Dine In');
     setReceipt(null);
     setPaymentMethod(null);
     setCheckoutStep('cart');
@@ -378,6 +470,178 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
     if (newStatus === 'Served' && previousStatus !== 'Served') {
       deductInventoryForOrder(existingOrder || orderId);
     }
+  }
+
+  function openEditOrder(order: KDSOrder) {
+    setEditingOrder(order);
+    setEditCustomerName(order.customer_name || '');
+    setEditOrderType(order.order_type || 'Dine In');
+    setEditInstructions(order.instructions || '');
+    setEditDiscountPercent(order.discount_percent || 0);
+    setEditPaymentMethod(order.payment_method || 'cash');
+    setSelectedAddItem('');
+    setEditItems(
+      order.items.map((it) => ({
+        id: it.id,
+        menu_item_id: it.menu_item_id,
+        item_name: it.item_name,
+        item_price: Number(it.item_price),
+        quantity: it.quantity,
+      })),
+    );
+  }
+
+  async function saveEditedOrder(andPrint: boolean = false) {
+    if (!editingOrder) return;
+    setEditSaving(true);
+
+    const editSubtotal = editItems.reduce((acc, it) => acc + it.item_price * it.quantity, 0);
+    const editValidDiscount = Math.max(0, Math.min(100, isNaN(editDiscountPercent) ? 0 : editDiscountPercent));
+    const editDiscountAmount = Math.round((editSubtotal * editValidDiscount) / 100);
+    const editTotalAmount = Math.max(0, editSubtotal - editDiscountAmount);
+
+    const updatePayload = {
+      total_amount: editTotalAmount,
+      subtotal: editSubtotal,
+      discount_percent: editValidDiscount,
+      discount_amount: editDiscountAmount,
+      payment_method: editPaymentMethod,
+      customer_name: editCustomerName.trim() || null,
+      order_type: editOrderType,
+      instructions: editInstructions.trim() || null,
+    };
+
+    let { error: ordErr } = await supabase
+      .from('orders')
+      .update(updatePayload)
+      .eq('id', editingOrder.id);
+
+    if (ordErr) {
+      console.warn('Update full order failed, trying without extra fields:', ordErr);
+      const { order_type, customer_name, instructions, ...basicPayload } = updatePayload;
+      await supabase.from('orders').update(basicPayload).eq('id', editingOrder.id);
+    }
+
+    await supabase.from('order_items').delete().eq('order_id', editingOrder.id);
+
+    if (editItems.length > 0) {
+      const itemsPayload = editItems.map((it) => ({
+        order_id: editingOrder.id,
+        menu_item_id: it.menu_item_id,
+        item_name: it.item_name,
+        item_price: it.item_price,
+        quantity: it.quantity,
+      }));
+      await supabase.from('order_items').insert(itemsPayload);
+    }
+
+    const currentEditingOrder = editingOrder;
+    setEditSaving(false);
+    setEditingOrder(null);
+    loadKdsOrders();
+
+    if (andPrint) {
+      const cartLines: CartLine[] = editItems.map((it) => ({
+        item: {
+          id: it.menu_item_id || it.id || '',
+          name: it.item_name,
+          category: '',
+          price: it.item_price,
+          description: null,
+          is_available: true,
+          created_at: '',
+        },
+        quantity: it.quantity,
+      }));
+
+      setReceipt({
+        orderId: currentEditingOrder.id,
+        orderNumber: formatOrderDisplayNumber(currentEditingOrder),
+        subtotal: editSubtotal,
+        discountPercent: editValidDiscount,
+        discountAmount: editDiscountAmount,
+        total: editTotalAmount,
+        method: editPaymentMethod,
+        lines: cartLines,
+        instructions: editInstructions.trim() || null,
+        customerName: editCustomerName.trim() || null,
+        orderType: editOrderType,
+        timestamp: currentEditingOrder.created_at || new Date().toISOString(),
+      });
+      setCartOpen(true);
+      setCheckoutStep('receipt');
+    }
+  }
+
+  function reprintOrderReceipt(order: KDSOrder) {
+    const computedItemsSubtotal = order.items.reduce(
+      (acc, item) => acc + Number(item.item_price || 0) * (item.quantity || 1),
+      0,
+    );
+    const displaySubtotal =
+      order.subtotal && Number(order.subtotal) > 0
+        ? Number(order.subtotal)
+        : computedItemsSubtotal > 0
+          ? computedItemsSubtotal
+          : order.total_amount;
+
+    const displayDiscountAmount =
+      order.discount_amount && Number(order.discount_amount) > 0
+        ? Number(order.discount_amount)
+        : displaySubtotal > order.total_amount
+          ? displaySubtotal - order.total_amount
+          : 0;
+
+    const displayDiscountPercent =
+      order.discount_percent && Number(order.discount_percent) > 0
+        ? Number(order.discount_percent)
+        : displaySubtotal > 0 && displayDiscountAmount > 0
+          ? Math.round((displayDiscountAmount / displaySubtotal) * 100)
+          : 0;
+
+    const cartLines: CartLine[] = order.items.map((it) => ({
+      item: {
+        id: it.menu_item_id || it.id || '',
+        name: it.item_name,
+        category: '',
+        price: Number(it.item_price),
+        description: null,
+        is_available: true,
+        created_at: '',
+      },
+      quantity: it.quantity,
+    }));
+
+    setReceipt({
+      orderId: order.id,
+      orderNumber: formatOrderDisplayNumber(order),
+      subtotal: displaySubtotal,
+      discountPercent: displayDiscountPercent,
+      discountAmount: displayDiscountAmount,
+      total: Number(order.total_amount),
+      method: order.payment_method || 'cash',
+      lines: cartLines,
+      instructions: order.instructions || null,
+      customerName: order.customer_name || null,
+      orderType: order.order_type || 'Dine In',
+      timestamp: order.created_at || new Date().toISOString(),
+    });
+    setCartOpen(true);
+    setCheckoutStep('receipt');
+  }
+
+  async function executeDeleteOrder() {
+    if (!deletingOrder) return;
+    setDeleting(true);
+    try {
+      await supabase.from('order_items').delete().eq('order_id', deletingOrder.id);
+      await supabase.from('orders').delete().eq('id', deletingOrder.id);
+    } catch (err) {
+      console.error('Failed to delete order:', err);
+    }
+    setDeleting(false);
+    setDeletingOrder(null);
+    loadKdsOrders();
   }
 
   // Count active orders currently Being Prepared
@@ -580,6 +844,9 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                 )}
                 nowMs={nowMs}
                 onUpdateStatus={updateOrderStatus}
+                onEditOrder={openEditOrder}
+                onDeleteOrder={(ord) => setDeletingOrder(ord)}
+                onReprintReceipt={reprintOrderReceipt}
               />
             )}
           </div>
@@ -696,6 +963,67 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                       <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-zinc-500">%</span>
                     </div>
                   </div>
+                </div>
+
+                {/* Order Type Selector (Dine In / Take Away) */}
+                <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-3 space-y-2">
+                  <label className="text-xs font-semibold text-zinc-300 flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <UtensilsCrossed size={14} className="text-yellow-400" /> Order Type
+                    </span>
+                    <span className="text-[10px] font-bold text-yellow-400 uppercase tracking-wider bg-yellow-400/10 px-2 py-0.5 rounded border border-yellow-400/20">
+                      {orderType}
+                    </span>
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setOrderType('Dine In')}
+                      className={`flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs font-bold transition-all border ${
+                        orderType === 'Dine In'
+                          ? 'bg-yellow-400 text-black border-yellow-400 shadow-md shadow-yellow-400/10'
+                          : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:text-white hover:border-zinc-700'
+                      }`}
+                    >
+                      <UtensilsCrossed size={15} /> Dine In
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setOrderType('Take Away')}
+                      className={`flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs font-bold transition-all border ${
+                        orderType === 'Take Away'
+                          ? 'bg-yellow-400 text-black border-yellow-400 shadow-md shadow-yellow-400/10'
+                          : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:text-white hover:border-zinc-700'
+                      }`}
+                    >
+                      <ShoppingBag size={15} /> Take Away
+                    </button>
+                  </div>
+                </div>
+
+                {/* Customer Name Section */}
+                <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+                      <User size={14} className="text-yellow-400" /> Customer Name
+                    </label>
+                    {customerName.trim() && (
+                      <button
+                        type="button"
+                        onClick={() => setCustomerName('')}
+                        className="text-[10px] text-zinc-500 hover:text-red-400 transition-colors font-medium"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    type="text"
+                    value={customerName}
+                    onChange={(e) => setCustomerName(e.target.value)}
+                    placeholder="Enter customer name (optional)..."
+                    className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white placeholder-zinc-600 focus:border-yellow-400 outline-none transition-colors"
+                  />
                 </div>
 
                 {/* Order Instructions Section */}
@@ -828,9 +1156,6 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                 <Check className="text-green-400" size={24} />
               </div>
               <p className="font-bold text-base">Order Complete!</p>
-              <p className="text-xs text-yellow-400 font-semibold mt-1 bg-yellow-400/10 inline-block px-3 py-1 rounded-full border border-yellow-400/20">
-                Pushed to Kitchen (Being Prepared)
-              </p>
               <p className="text-zinc-500 text-xs mt-1.5">{formatDateTime(receipt.timestamp)}</p>
             </div>
 
@@ -851,19 +1176,32 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                 <p className="text-[10px] text-zinc-600 font-sans">Official Receipt</p>
               </div>
 
+              {/* Big & Bold Order Type Banner at Top of Receipt */}
+              <div className="text-center my-2.5 py-1.5 px-3 bg-black text-white rounded-lg font-sans font-black text-lg tracking-widest uppercase shadow-sm">
+                *** {receipt.orderType || 'DINE IN'} ***
+              </div>
+
               {/* Order Info Details Box */}
               <div className="bg-zinc-100 border border-zinc-300 rounded-lg p-2.5 my-2 space-y-1 text-xs font-sans">
                 <div className="flex justify-between items-center">
                   <span className="text-zinc-600 font-medium">Order Number:</span>
-                  <span className="font-black font-mono text-sm text-black">#{receipt.orderId.slice(0, 8).toUpperCase()}</span>
+                  <span className="font-black font-mono text-base text-black">
+                    {receipt.orderNumber || formatOrderDisplayNumber({ id: receipt.orderId, order_number: receipt.orderNumber })}
+                  </span>
                 </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-zinc-600 font-medium">Order Type:</span>
+                  <span className="font-black text-black text-sm uppercase">{receipt.orderType || 'DINE IN'}</span>
+                </div>
+                {receipt.customerName && (
+                  <div className="flex justify-between items-center bg-zinc-200/80 border border-zinc-300 px-2 py-1 rounded my-0.5">
+                    <span className="text-zinc-700 font-bold uppercase text-[10px] tracking-wider">Customer Name:</span>
+                    <span className="font-black font-sans text-sm text-black">{receipt.customerName}</span>
+                  </div>
+                )}
                 <div className="flex justify-between items-center">
                   <span className="text-zinc-600 font-medium">Date & Time:</span>
                   <span className="font-medium text-zinc-800">{formatDateTime(receipt.timestamp)}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-zinc-600 font-medium">Status:</span>
-                  <span className="font-bold text-amber-800 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded text-[10px] uppercase">BEING PREPARED</span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-zinc-600 font-medium">Payment Method:</span>
@@ -956,6 +1294,326 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
           </div>
         )}
       </Modal>
+
+      {/* KDS Edit Order Modal */}
+      <Modal
+        open={!!editingOrder}
+        onClose={() => setEditingOrder(null)}
+        title={`Edit Order ${editingOrder ? formatOrderDisplayNumber(editingOrder) : ''}`}
+        maxWidth="max-w-lg"
+      >
+        {editingOrder && (
+          <div className="space-y-4 max-h-[75vh] overflow-y-auto pr-1">
+            {/* Customer Name & Order Type */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1 flex items-center gap-1">
+                  <User size={13} className="text-yellow-400" /> Customer Name
+                </label>
+                <input
+                  type="text"
+                  value={editCustomerName}
+                  onChange={(e) => setEditCustomerName(e.target.value)}
+                  placeholder="Optional customer name"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white focus:border-yellow-400 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1 flex items-center gap-1">
+                  <UtensilsCrossed size={13} className="text-yellow-400" /> Order Type
+                </label>
+                <div className="grid grid-cols-2 gap-1 bg-zinc-950 p-1 rounded-xl border border-zinc-800">
+                  <button
+                    type="button"
+                    onClick={() => setEditOrderType('Dine In')}
+                    className={`py-1.5 text-xs font-bold rounded-lg transition-all ${
+                      editOrderType === 'Dine In'
+                        ? 'bg-yellow-400 text-black shadow-sm'
+                        : 'text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    Dine In
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditOrderType('Take Away')}
+                    className={`py-1.5 text-xs font-bold rounded-lg transition-all ${
+                      editOrderType === 'Take Away'
+                        ? 'bg-yellow-400 text-black shadow-sm'
+                        : 'text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    Take Away
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Order Items List */}
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-zinc-300 uppercase tracking-wider block">
+                Order Line Items
+              </label>
+              {editItems.length === 0 ? (
+                <p className="text-xs text-zinc-500 italic py-2 text-center">No items in order. Add items below.</p>
+              ) : (
+                <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
+                  {editItems.map((line, idx) => (
+                    <div
+                      key={idx}
+                      className="flex items-center gap-2 bg-zinc-950 border border-zinc-800 rounded-xl p-2.5 text-xs"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold truncate text-white">{line.item_name}</p>
+                        <p className="text-zinc-500 text-[11px]">{formatPKR(line.item_price)} each</p>
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditItems((prev) =>
+                              prev
+                                .map((l, i) => (i === idx ? { ...l, quantity: l.quantity - 1 } : l))
+                                .filter((l) => l.quantity > 0),
+                            );
+                          }}
+                          className="w-6 h-6 rounded bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-300"
+                        >
+                          <Minus size={12} />
+                        </button>
+                        <span className="w-5 text-center font-bold text-white">{line.quantity}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditItems((prev) =>
+                              prev.map((l, i) => (i === idx ? { ...l, quantity: l.quantity + 1 } : l)),
+                            );
+                          }}
+                          className="w-6 h-6 rounded bg-yellow-400 text-black hover:bg-yellow-300 flex items-center justify-center font-bold"
+                        >
+                          <Plus size={12} />
+                        </button>
+                      </div>
+
+                      <span className="w-16 text-right font-bold text-yellow-400">
+                        {formatPKR(line.item_price * line.quantity)}
+                      </span>
+
+                      <button
+                        type="button"
+                        onClick={() => setEditItems((prev) => prev.filter((_, i) => i !== idx))}
+                        className="text-zinc-600 hover:text-red-400 p-1 transition-colors"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Add Menu Item Dropdown */}
+              <div className="flex items-center gap-2 pt-1">
+                <select
+                  value={selectedAddItem}
+                  onChange={(e) => setSelectedAddItem(e.target.value)}
+                  className="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white focus:border-yellow-400 outline-none"
+                >
+                  <option value="">-- Add item from menu --</option>
+                  {items.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name} ({formatPKR(m.price)})
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!selectedAddItem) return;
+                    const found = items.find((i) => i.id === selectedAddItem);
+                    if (!found) return;
+                    setEditItems((prev) => {
+                      const existing = prev.find((l) => l.menu_item_id === found.id);
+                      if (existing) {
+                        return prev.map((l) =>
+                          l.menu_item_id === found.id ? { ...l, quantity: l.quantity + 1 } : l,
+                        );
+                      }
+                      return [
+                        ...prev,
+                        {
+                          menu_item_id: found.id,
+                          item_name: found.name,
+                          item_price: Number(found.price),
+                          quantity: 1,
+                        },
+                      ];
+                    });
+                    setSelectedAddItem('');
+                  }}
+                  disabled={!selectedAddItem}
+                  className="bg-yellow-400 hover:bg-yellow-300 disabled:opacity-40 text-black font-bold px-3 py-2 rounded-xl text-xs transition-all flex items-center gap-1"
+                >
+                  <Plus size={14} /> Add
+                </button>
+              </div>
+            </div>
+
+            {/* Discount & Payment Method */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1 flex items-center gap-1">
+                  <Percent size={13} className="text-yellow-400" /> Discount (%)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={editDiscountPercent === 0 ? '' : editDiscountPercent}
+                  onChange={(e) => {
+                    const val = parseFloat(e.target.value);
+                    setEditDiscountPercent(isNaN(val) ? 0 : Math.min(100, Math.max(0, val)));
+                  }}
+                  placeholder="0"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white focus:border-yellow-400 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1 flex items-center gap-1">
+                  <CreditCard size={13} className="text-yellow-400" /> Payment Method
+                </label>
+                <select
+                  value={editPaymentMethod}
+                  onChange={(e) => setEditPaymentMethod(e.target.value as 'cash' | 'card')}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white focus:border-yellow-400 outline-none"
+                >
+                  <option value="cash">Cash</option>
+                  <option value="card">Card / Online</option>
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-zinc-300 mb-1 flex items-center gap-1">
+                <FileText size={13} className="text-yellow-400" /> Order Instructions
+              </label>
+              <textarea
+                value={editInstructions}
+                onChange={(e) => setEditInstructions(e.target.value)}
+                placeholder="Special notes..."
+                rows={2}
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-2 text-xs text-white focus:border-yellow-400 outline-none resize-none"
+              />
+            </div>
+
+            {/* Price Summary */}
+            {(() => {
+              const editSubtotal = editItems.reduce((acc, it) => acc + it.item_price * it.quantity, 0);
+              const editValidDiscount = Math.max(
+                0,
+                Math.min(100, isNaN(editDiscountPercent) ? 0 : editDiscountPercent),
+              );
+              const editDiscountAmount = Math.round((editSubtotal * editValidDiscount) / 100);
+              const editTotalAmount = Math.max(0, editSubtotal - editDiscountAmount);
+              return (
+                <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-3 space-y-1 text-xs">
+                  <div className="flex justify-between text-zinc-400">
+                    <span>Subtotal:</span>
+                    <span>{formatPKR(editSubtotal)}</span>
+                  </div>
+                  {editValidDiscount > 0 && (
+                    <div className="flex justify-between text-green-400">
+                      <span>Discount ({editValidDiscount}%):</span>
+                      <span>-{formatPKR(editDiscountAmount)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between font-bold text-white text-sm pt-1 border-t border-zinc-800">
+                    <span>New Total:</span>
+                    <span className="text-yellow-400 font-black">{formatPKR(editTotalAmount)}</span>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Save / Save & Print / Cancel Buttons */}
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setEditingOrder(null)}
+                className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-medium py-2.5 px-3 rounded-xl transition-colors text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => saveEditedOrder(false)}
+                disabled={editSaving || editItems.length === 0}
+                className="flex-1 bg-yellow-500/20 border border-yellow-500/30 text-yellow-300 hover:bg-yellow-500/30 disabled:opacity-40 font-bold py-2.5 rounded-xl transition-all text-xs flex items-center justify-center gap-1.5"
+              >
+                <Check size={15} /> Save Changes
+              </button>
+              <button
+                type="button"
+                onClick={() => saveEditedOrder(true)}
+                disabled={editSaving || editItems.length === 0}
+                className="flex-1 bg-yellow-400 hover:bg-yellow-300 disabled:opacity-40 text-black font-bold py-2.5 rounded-xl transition-all active:scale-95 flex items-center justify-center gap-1.5 text-xs shadow-md shadow-yellow-400/10"
+              >
+                {editSaving ? (
+                  <span className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />
+                ) : (
+                  <>
+                    <Printer size={15} /> Save & Print
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Delete Cancelled Order Confirmation Modal */}
+      <Modal
+        open={!!deletingOrder}
+        onClose={() => setDeletingOrder(null)}
+        title="Delete Order Permanently"
+        maxWidth="max-w-sm"
+      >
+        {deletingOrder && (
+          <div className="space-y-4">
+            <p className="text-sm text-zinc-300">
+              Are you sure you want to permanently delete Order{' '}
+              <span className="font-mono font-bold text-yellow-400">
+                {formatOrderDisplayNumber(deletingOrder)}
+              </span>
+              ? This action cannot be undone.
+            </p>
+            <div className="flex gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => setDeletingOrder(null)}
+                className="flex-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-medium py-2.5 rounded-xl transition-colors text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={executeDeleteOrder}
+                disabled={deleting}
+                className="flex-1 bg-red-500 hover:bg-red-400 disabled:opacity-50 text-white font-bold py-2.5 rounded-xl transition-all active:scale-95 text-xs flex items-center justify-center gap-1.5"
+              >
+                {deleting ? (
+                  <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                ) : (
+                  <>
+                    <Trash2 size={15} /> Delete Permanently
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }
@@ -966,10 +1624,16 @@ function KDSOrdersGrid({
   orders,
   nowMs,
   onUpdateStatus,
+  onEditOrder,
+  onDeleteOrder,
+  onReprintReceipt,
 }: {
   orders: KDSOrder[];
   nowMs: number;
   onUpdateStatus: (orderId: string, newStatus: OrderStatus) => void;
+  onEditOrder: (order: KDSOrder) => void;
+  onDeleteOrder: (order: KDSOrder) => void;
+  onReprintReceipt: (order: KDSOrder) => void;
 }) {
   if (orders.length === 0) {
     return (
@@ -989,6 +1653,9 @@ function KDSOrdersGrid({
           order={order}
           nowMs={nowMs}
           onUpdateStatus={onUpdateStatus}
+          onEditOrder={onEditOrder}
+          onDeleteOrder={onDeleteOrder}
+          onReprintReceipt={onReprintReceipt}
         />
       ))}
     </div>
@@ -999,10 +1666,16 @@ function KDSCard({
   order,
   nowMs,
   onUpdateStatus,
+  onEditOrder,
+  onDeleteOrder,
+  onReprintReceipt,
 }: {
   order: KDSOrder;
   nowMs: number;
   onUpdateStatus: (orderId: string, newStatus: OrderStatus) => void;
+  onEditOrder: (order: KDSOrder) => void;
+  onDeleteOrder: (order: KDSOrder) => void;
+  onReprintReceipt: (order: KDSOrder) => void;
 }) {
   const status = order.status || 'Being Prepared';
 
@@ -1060,9 +1733,9 @@ function KDSCard({
         {/* Card Header */}
         <div className="flex items-start justify-between pb-3 border-b border-zinc-800">
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="font-mono font-black text-base text-yellow-400">
-                #{order.id.slice(0, 8).toUpperCase()}
+                {formatOrderDisplayNumber(order)}
               </span>
               <span
                 className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${order.payment_method === 'cash'
@@ -1072,7 +1745,22 @@ function KDSCard({
               >
                 {order.payment_method === 'cash' ? 'Cash' : 'Card'}
               </span>
+              <span
+                className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider ${
+                  (order.order_type || 'Dine In') === 'Take Away'
+                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                    : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                }`}
+              >
+                {order.order_type || 'Dine In'}
+              </span>
             </div>
+            {order.customer_name && (
+              <p className="text-xs font-bold text-white mt-1 flex items-center gap-1">
+                <span className="text-zinc-400 font-normal">Cust:</span>
+                <span className="text-yellow-400 font-extrabold">{order.customer_name}</span>
+              </p>
+            )}
             <p className="text-[11px] text-zinc-500 mt-0.5">{formatDateTime(order.created_at)}</p>
           </div>
 
@@ -1162,30 +1850,59 @@ function KDSCard({
         </div>
 
         {/* Actions */}
-        <div className="flex gap-2">
-          {status === 'Being Prepared' ? (
-            <>
+        <div className="flex flex-col gap-2">
+          <div className="flex gap-2">
+            {status === 'Being Prepared' ? (
+              <>
+                <button
+                  onClick={() => onUpdateStatus(order.id, 'Served')}
+                  className="flex-1 bg-green-500 hover:bg-green-400 text-black font-bold py-2 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all active:scale-95 shadow-sm shadow-green-500/20"
+                >
+                  <CheckCircle size={16} /> Serve Order
+                </button>
+                <button
+                  onClick={() => onUpdateStatus(order.id, 'Cancelled')}
+                  className="bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 font-semibold py-2 px-3 rounded-xl text-xs flex items-center justify-center gap-1 transition-colors"
+                >
+                  <XCircle size={16} /> Cancel
+                </button>
+              </>
+            ) : (
               <button
-                onClick={() => onUpdateStatus(order.id, 'Served')}
-                className="flex-1 bg-green-500 hover:bg-green-400 text-black font-bold py-2 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all active:scale-95 shadow-sm shadow-green-500/20"
+                onClick={() => onUpdateStatus(order.id, 'Being Prepared')}
+                className="flex-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-medium py-2 rounded-xl text-xs transition-colors flex items-center justify-center gap-1.5"
               >
-                <CheckCircle size={16} /> Serve Order
+                <RefreshCw size={14} /> Move back to Preparation
               </button>
-              <button
-                onClick={() => onUpdateStatus(order.id, 'Cancelled')}
-                className="bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 font-semibold py-2 px-3 rounded-xl text-xs flex items-center justify-center gap-1 transition-colors"
-              >
-                <XCircle size={16} /> Cancel
-              </button>
-            </>
-          ) : (
+            )}
+          </div>
+
+          <div className="flex gap-2">
             <button
-              onClick={() => onUpdateStatus(order.id, 'Being Prepared')}
-              className="w-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-medium py-2 rounded-xl text-xs transition-colors flex items-center justify-center gap-1.5"
+              onClick={() => onEditOrder(order)}
+              className="flex-1 bg-yellow-400/10 hover:bg-yellow-400/20 text-yellow-400 border border-yellow-400/30 font-bold py-1.5 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all"
             >
-              <RefreshCw size={14} /> Move back to Preparation
+              <Pencil size={14} /> Edit
             </button>
-          )}
+
+            <button
+              onClick={() => onReprintReceipt(order)}
+              className="bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 font-bold py-1.5 px-3 rounded-xl text-xs flex items-center justify-center gap-1 transition-all"
+              title="Print / Reprint receipt"
+            >
+              <Printer size={14} /> Receipt
+            </button>
+
+            {status === 'Cancelled' && (
+              <button
+                onClick={() => onDeleteOrder(order)}
+                className="bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/40 font-bold py-1.5 px-3 rounded-xl text-xs flex items-center justify-center gap-1 transition-all"
+                title="Delete order permanently"
+              >
+                <Trash2 size={14} /> Delete
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>

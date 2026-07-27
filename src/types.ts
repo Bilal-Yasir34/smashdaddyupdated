@@ -18,6 +18,7 @@ export interface MenuItem {
 }
 
 export type OrderStatus = 'Being Prepared' | 'Served' | 'Cancelled';
+export type OrderType = 'Dine In' | 'Take Away';
 
 export interface Order {
   id: string;
@@ -28,6 +29,9 @@ export interface Order {
   payment_method: 'cash' | 'card';
   status: OrderStatus;
   instructions?: string | null;
+  customer_name?: string | null;
+  order_type?: OrderType;
+  order_number?: string | null;
   created_at: string;
 }
 
