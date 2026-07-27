@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
-import type { MenuItem } from '../types';
-import { Plus, Pencil, Trash2, Search } from 'lucide-react';
+import type { MenuItem, InventoryItem } from '../types';
+import { Plus, Pencil, Trash2, Search, Package } from 'lucide-react';
 import Modal from '../components/Modal';
 import { formatPKR } from '../lib/format';
 
@@ -13,12 +13,18 @@ interface MenuManagementProps {
   activeTab: AdminTab;
 }
 
+interface EditIngredient {
+  inventory_item_id: string;
+  quantity_required: number;
+}
+
 interface EditForm {
   name: string;
   category: string;
   price: string;
   description: string;
   is_available: boolean;
+  ingredients: EditIngredient[];
 }
 
 const emptyForm: EditForm = {
@@ -27,6 +33,7 @@ const emptyForm: EditForm = {
   price: '',
   description: '',
   is_available: true,
+  ingredients: [],
 };
 
 export default function MenuManagement({ onLogout, onNavigate, activeTab }: MenuManagementProps) {
@@ -39,6 +46,17 @@ export default function MenuManagement({ onLogout, onNavigate, activeTab }: Menu
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [confirmDelete, setConfirmDelete] = useState<MenuItem | null>(null);
+  const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
+
+  const loadInventory = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('inventory_items')
+      .select('*')
+      .order('name', { ascending: true });
+    if (!error && data) {
+      setInventoryItems(data as InventoryItem[]);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -57,7 +75,8 @@ export default function MenuManagement({ onLogout, onNavigate, activeTab }: Menu
 
   useEffect(() => {
     load();
-  }, [load]);
+    loadInventory();
+  }, [load, loadInventory]);
 
   function openAdd() {
     setEditing(null);
@@ -66,7 +85,7 @@ export default function MenuManagement({ onLogout, onNavigate, activeTab }: Menu
     setModalOpen(true);
   }
 
-  function openEdit(item: MenuItem) {
+  async function openEdit(item: MenuItem) {
     setEditing(item);
     setForm({
       name: item.name,
@@ -74,9 +93,51 @@ export default function MenuManagement({ onLogout, onNavigate, activeTab }: Menu
       price: String(item.price),
       description: item.description ?? '',
       is_available: item.is_available,
+      ingredients: [],
     });
     setError('');
     setModalOpen(true);
+
+    const { data, error: ingErr } = await supabase
+      .from('menu_item_ingredients')
+      .select('*')
+      .eq('menu_item_id', item.id);
+
+    if (!ingErr && data) {
+      const mapped = data.map((ing) => ({
+        inventory_item_id: ing.inventory_item_id,
+        quantity_required: Number(ing.quantity_required) || 1,
+      }));
+      setForm((prev) => ({ ...prev, ingredients: mapped }));
+    }
+  }
+
+  function addIngredientRow() {
+    if (inventoryItems.length === 0) return;
+    const selectedIds = new Set(form.ingredients.map((i) => i.inventory_item_id));
+    const available = inventoryItems.find((i) => !selectedIds.has(i.id)) || inventoryItems[0];
+    setForm((prev) => ({
+      ...prev,
+      ingredients: [
+        ...prev.ingredients,
+        { inventory_item_id: available.id, quantity_required: 1 },
+      ],
+    }));
+  }
+
+  function updateIngredientRow(index: number, field: keyof EditIngredient, value: any) {
+    setForm((prev) => {
+      const next = [...prev.ingredients];
+      next[index] = { ...next[index], [field]: value };
+      return { ...prev, ingredients: next };
+    });
+  }
+
+  function removeIngredientRow(index: number) {
+    setForm((prev) => ({
+      ...prev,
+      ingredients: prev.ingredients.filter((_, i) => i !== index),
+    }));
   }
 
   async function handleSave() {
@@ -98,18 +159,51 @@ export default function MenuManagement({ onLogout, onNavigate, activeTab }: Menu
       description: form.description.trim() || null,
       is_available: form.is_available,
     };
+
+    let savedItemId = editing?.id;
+
     if (editing) {
       const { error } = await supabase.from('menu_items').update(payload).eq('id', editing.id);
-      if (error) setError(error.message);
+      if (error) {
+        setError(error.message);
+        setSaving(false);
+        return;
+      }
     } else {
-      const { error } = await supabase.from('menu_items').insert(payload);
-      if (error) setError(error.message);
+      const { data, error } = await supabase.from('menu_items').insert(payload).select().single();
+      if (error || !data) {
+        setError(error ? error.message : 'Failed to save menu item');
+        setSaving(false);
+        return;
+      }
+      savedItemId = data.id;
     }
+
+    if (savedItemId) {
+      await supabase
+        .from('menu_item_ingredients')
+        .delete()
+        .eq('menu_item_id', savedItemId);
+
+      if (form.ingredients.length > 0) {
+        const ingredientsPayload = form.ingredients.map((ing) => ({
+          menu_item_id: savedItemId,
+          inventory_item_id: ing.inventory_item_id,
+          quantity_required: ing.quantity_required,
+        }));
+        const { error: ingInsErr } = await supabase
+          .from('menu_item_ingredients')
+          .insert(ingredientsPayload);
+
+        if (ingInsErr) {
+          console.warn('Failed to insert ingredients:', ingInsErr);
+        }
+      }
+    }
+
     setSaving(false);
-    if (!error) {
-      setModalOpen(false);
-      load();
-    }
+    setModalOpen(false);
+    load();
   }
 
   async function handleDelete(item: MenuItem) {
@@ -277,6 +371,7 @@ export default function MenuManagement({ onLogout, onNavigate, activeTab }: Menu
         open={modalOpen}
         onClose={() => setModalOpen(false)}
         title={editing ? 'Edit Item' : 'Add Menu Item'}
+        maxWidth="max-w-lg"
       >
         <div className="space-y-4">
           <div>
@@ -328,6 +423,88 @@ export default function MenuManagement({ onLogout, onNavigate, activeTab }: Menu
             />
             <span className="text-sm text-zinc-300">Available for ordering</span>
           </label>
+
+          {/* Linked Inventory Items / Recipe Ingredients */}
+          <div className="border-t border-zinc-800 pt-3 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="text-xs font-bold text-zinc-200 uppercase tracking-wider flex items-center gap-1.5">
+                  <Package size={14} className="text-yellow-400" /> Linked Inventory Items
+                </label>
+                <p className="text-[11px] text-zinc-500">
+                  Select items from inventory consumed when 1 unit of this product is served.
+                </p>
+              </div>
+              {inventoryItems.length > 0 && (
+                <button
+                  type="button"
+                  onClick={addIngredientRow}
+                  className="text-xs text-yellow-400 hover:text-yellow-300 font-bold flex items-center gap-1 bg-yellow-400/10 px-2.5 py-1 rounded-lg border border-yellow-400/20 transition-all"
+                >
+                  <Plus size={14} /> Add Item
+                </button>
+              )}
+            </div>
+
+            {inventoryItems.length === 0 ? (
+              <p className="text-xs text-zinc-500 italic bg-zinc-950 p-2.5 rounded-lg border border-zinc-800">
+                No inventory items found. Please create items in the Inventory tab first.
+              </p>
+            ) : form.ingredients.length === 0 ? (
+              <p className="text-xs text-zinc-500 italic bg-zinc-950 p-2.5 rounded-lg border border-zinc-800 text-center py-3">
+                No inventory items linked yet. Click "Add Item" to link ingredients (e.g. buns, patties, sauce).
+              </p>
+            ) : (
+              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                {form.ingredients.map((ing, idx) => (
+                  <div
+                    key={idx}
+                    className="flex items-center gap-2 bg-zinc-950 border border-zinc-800 p-2 rounded-xl text-xs"
+                  >
+                    <select
+                      value={ing.inventory_item_id}
+                      onChange={(e) => updateIngredientRow(idx, 'inventory_item_id', e.target.value)}
+                      className="flex-1 bg-zinc-900 border border-zinc-800 text-white rounded-lg px-2.5 py-1.5 focus:border-yellow-400 outline-none truncate"
+                    >
+                      {inventoryItems.map((inv) => (
+                        <option key={inv.id} value={inv.id}>
+                          {inv.name} ({inv.unit})
+                        </option>
+                      ))}
+                    </select>
+
+                    <div className="flex items-center gap-1 w-28 shrink-0">
+                      <span className="text-zinc-500 text-[11px]">Qty:</span>
+                      <input
+                        type="number"
+                        step="0.1"
+                        min="0.1"
+                        value={ing.quantity_required}
+                        onChange={(e) =>
+                          updateIngredientRow(
+                            idx,
+                            'quantity_required',
+                            Math.max(0.01, parseFloat(e.target.value) || 1),
+                          )
+                        }
+                        className="w-full bg-zinc-900 border border-zinc-800 text-white font-bold rounded-lg px-2 py-1.5 text-center focus:border-yellow-400 outline-none"
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => removeIngredientRow(idx)}
+                      className="p-1.5 text-zinc-500 hover:text-red-400 transition-colors shrink-0"
+                      title="Remove ingredient"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {error && <p className="text-red-400 text-sm">{error}</p>}
           <div className="flex gap-3 pt-1">
             <button

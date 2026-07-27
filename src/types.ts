@@ -1,3 +1,11 @@
+export interface MenuItemIngredient {
+  id?: string;
+  menu_item_id?: string;
+  inventory_item_id: string;
+  quantity_required: number;
+  inventory_item?: InventoryItem;
+}
+
 export interface MenuItem {
   id: string;
   name: string;
@@ -5,6 +13,7 @@ export interface MenuItem {
   price: number;
   description: string | null;
   is_available: boolean;
+  ingredients?: MenuItemIngredient[];
   created_at: string;
 }
 

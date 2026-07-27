@@ -266,7 +266,101 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
     setCartOpen(false);
   }
 
+  async function deductInventoryForOrder(orderOrId: KDSOrder | string) {
+    try {
+      let targetOrder: KDSOrder | undefined;
+
+      if (typeof orderOrId === 'string') {
+        targetOrder = kdsOrders.find((o) => o.id === orderOrId);
+      } else {
+        targetOrder = orderOrId;
+      }
+
+      let itemsToDeduct: OrderItem[] = targetOrder?.items || [];
+
+      if (itemsToDeduct.length === 0 && typeof orderOrId === 'string') {
+        const { data: oiData } = await supabase
+          .from('order_items')
+          .select('*')
+          .eq('order_id', orderOrId);
+        if (oiData) itemsToDeduct = oiData as OrderItem[];
+      }
+
+      if (itemsToDeduct.length === 0) return;
+
+      const menuItemIds = itemsToDeduct
+        .map((i) => i.menu_item_id)
+        .filter((id): id is string => Boolean(id));
+
+      if (menuItemIds.length === 0) return;
+
+      const { data: ingredientsData, error: ingErr } = await supabase
+        .from('menu_item_ingredients')
+        .select('*')
+        .in('menu_item_id', menuItemIds);
+
+      if (ingErr || !ingredientsData || ingredientsData.length === 0) {
+        return;
+      }
+
+      const ingredientsByMenuItem = new Map<
+        string,
+        Array<{ inventory_item_id: string; quantity_required: number }>
+      >();
+
+      ingredientsData.forEach((ing) => {
+        const existing = ingredientsByMenuItem.get(ing.menu_item_id) || [];
+        existing.push({
+          inventory_item_id: ing.inventory_item_id,
+          quantity_required: Number(ing.quantity_required) || 1,
+        });
+        ingredientsByMenuItem.set(ing.menu_item_id, existing);
+      });
+
+      const deductions = new Map<string, number>();
+      itemsToDeduct.forEach((item) => {
+        if (!item.menu_item_id) return;
+        const recipeList = ingredientsByMenuItem.get(item.menu_item_id);
+        if (recipeList) {
+          recipeList.forEach((ing) => {
+            const currentTotal = deductions.get(ing.inventory_item_id) || 0;
+            deductions.set(
+              ing.inventory_item_id,
+              currentTotal + item.quantity * ing.quantity_required,
+            );
+          });
+        }
+      });
+
+      if (deductions.size === 0) return;
+
+      const invItemIds = Array.from(deductions.keys());
+      const { data: currentInvData } = await supabase
+        .from('inventory_items')
+        .select('id, quantity')
+        .in('id', invItemIds);
+
+      if (!currentInvData) return;
+
+      for (const inv of currentInvData) {
+        const qtyToSubtract = deductions.get(inv.id) || 0;
+        if (qtyToSubtract > 0) {
+          const newQty = Math.max(0, Number(inv.quantity || 0) - qtyToSubtract);
+          await supabase
+            .from('inventory_items')
+            .update({ quantity: newQty, updated_at: new Date().toISOString() })
+            .eq('id', inv.id);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to deduct inventory for served order:', err);
+    }
+  }
+
   async function updateOrderStatus(orderId: string, newStatus: OrderStatus) {
+    const existingOrder = kdsOrders.find((o) => o.id === orderId);
+    const previousStatus = existingOrder?.status || 'Being Prepared';
+
     setKdsOrders((prev) =>
       prev.map((o) => (o.id === orderId ? { ...o, status: newStatus } : o)),
     );
@@ -278,6 +372,11 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
     if (error) {
       console.error('Failed to update status:', error);
       loadKdsOrders();
+      return;
+    }
+
+    if (newStatus === 'Served' && previousStatus !== 'Served') {
+      deductInventoryForOrder(existingOrder || orderId);
     }
   }
 
