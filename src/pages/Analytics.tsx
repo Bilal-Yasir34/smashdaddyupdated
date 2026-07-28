@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import type { Order, OrderItem } from '../types';
 import { formatPKR, formatDateTime } from '../lib/format';
-import { TrendingUp, ShoppingBag, Receipt, Trash2, Calendar, AlertTriangle } from 'lucide-react';
+import { TrendingUp, ShoppingBag, Receipt, Trash2, Calendar, AlertTriangle, Clock } from 'lucide-react';
 import Modal from '../components/Modal';
 import { CLEAR_SALES_PASSWORD } from '../lib/auth';
 
@@ -37,6 +37,14 @@ export default function Analytics({ onLogout, onNavigate, activeTab }: Analytics
   const [clearPassword, setClearPassword] = useState('');
   const [clearError, setClearError] = useState('');
   const [clearing, setClearing] = useState(false);
+  const [now, setNow] = useState(() => new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNow(new Date());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -51,40 +59,61 @@ export default function Analytics({ onLogout, onNavigate, activeTab }: Analytics
     load();
   }, [load]);
 
-  function getStartOfPeriod(p: Period): Date {
-    const now = new Date();
-    const start = new Date(now);
-    if (p === 'day') {
-      start.setHours(0, 0, 0, 0);
-    } else if (p === 'week') {
-      const day = start.getDay();
-      const diff = day === 0 ? 6 : day - 1; // Monday start
-      start.setDate(start.getDate() - diff);
-      start.setHours(0, 0, 0, 0);
-    } else if (p === 'month') {
-      start.setDate(1);
-      start.setHours(0, 0, 0, 0);
-    } else {
-      start.setMonth(0, 1);
-      start.setHours(0, 0, 0, 0);
+  // Calculate time remaining until next sales day starts at 2:00 AM
+  const getNextSalesDayStart = (currentDate: Date): Date => {
+    const target = new Date(currentDate);
+    if (currentDate.getHours() >= 2) {
+      target.setDate(target.getDate() + 1);
     }
-    return start;
+    target.setHours(2, 0, 0, 0);
+    return target;
+  };
+
+  const nextSalesDayStart = getNextSalesDayStart(now);
+  const diffMs = Math.max(0, nextSalesDayStart.getTime() - now.getTime());
+  const hoursLeft = Math.floor(diffMs / (1000 * 60 * 60));
+  const minutesLeft = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+  const secondsLeft = Math.floor((diffMs % (1000 * 60)) / 1000);
+
+  function getStartOfPeriod(p: Period, currentTime: Date): Date {
+    const baseDate = new Date(currentTime);
+    // If current time is before 2:00 AM, current business day started yesterday at 2:00 AM
+    if (currentTime.getHours() < 2) {
+      baseDate.setDate(baseDate.getDate() - 1);
+    }
+
+    if (p === 'day') {
+      baseDate.setHours(2, 0, 0, 0);
+    } else if (p === 'week') {
+      const day = baseDate.getDay();
+      const diff = day === 0 ? 6 : day - 1; // Monday start
+      baseDate.setDate(baseDate.getDate() - diff);
+      baseDate.setHours(2, 0, 0, 0);
+    } else if (p === 'month') {
+      baseDate.setDate(1);
+      baseDate.setHours(2, 0, 0, 0);
+    } else {
+      baseDate.setMonth(0, 1);
+      baseDate.setHours(2, 0, 0, 0);
+    }
+    return baseDate;
   }
 
   let periodOrders: Order[] = [];
   if (period === 'custom') {
-    const start = new Date(startDate);
-    start.setHours(0, 0, 0, 0);
+    const [sYear, sMonth, sDay] = startDate.split('-').map(Number);
+    const start = new Date(sYear, sMonth - 1, sDay, 2, 0, 0, 0);
 
-    const end = new Date(endDate);
-    end.setHours(23, 59, 59, 999);
+    const [eYear, eMonth, eDay] = endDate.split('-').map(Number);
+    // Business day for endDate extends to 01:59:59.999 on the next calendar morning
+    const end = new Date(eYear, eMonth - 1, eDay + 1, 1, 59, 59, 999);
 
     periodOrders = orders.filter((o) => {
       const created = new Date(o.created_at);
       return created >= start && created <= end;
     });
   } else {
-    const periodStart = getStartOfPeriod(period);
+    const periodStart = getStartOfPeriod(period, now);
     periodOrders = orders.filter((o) => new Date(o.created_at) >= periodStart);
   }
 
@@ -182,6 +211,40 @@ export default function Analytics({ onLogout, onNavigate, activeTab }: Analytics
       </header>
 
       <main className="max-w-6xl mx-auto px-4 py-6">
+        {/* Next Day Sales Countdown Timer Banner */}
+        <div className="bg-gradient-to-r from-yellow-500/10 via-amber-500/10 to-zinc-900 border border-yellow-500/30 rounded-2xl p-4 sm:p-5 mb-6 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-lg shadow-yellow-500/5">
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-yellow-400/10 border border-yellow-400/20 rounded-xl text-yellow-400 animate-pulse">
+              <Clock size={24} />
+            </div>
+            <div>
+              <h2 className="text-sm font-semibold text-zinc-300 uppercase tracking-wider">
+                Next Day Sales Start In
+              </h2>
+              <p className="text-xs text-zinc-400 mt-0.5">
+                Business day rolls over daily at <span className="text-yellow-400 font-medium">2:00 AM</span>
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 font-mono">
+            <div className="bg-zinc-950/80 border border-zinc-800 px-3.5 py-2 rounded-xl text-center min-w-[60px]">
+              <span className="text-xl sm:text-2xl font-black text-yellow-400">{String(hoursLeft).padStart(2, '0')}</span>
+              <span className="block text-[10px] text-zinc-500 font-sans font-medium uppercase tracking-wider">Hours</span>
+            </div>
+            <span className="text-yellow-400 font-bold text-lg animate-pulse">:</span>
+            <div className="bg-zinc-950/80 border border-zinc-800 px-3.5 py-2 rounded-xl text-center min-w-[60px]">
+              <span className="text-xl sm:text-2xl font-black text-yellow-400">{String(minutesLeft).padStart(2, '0')}</span>
+              <span className="block text-[10px] text-zinc-500 font-sans font-medium uppercase tracking-wider">Mins</span>
+            </div>
+            <span className="text-yellow-400 font-bold text-lg animate-pulse">:</span>
+            <div className="bg-zinc-950/80 border border-zinc-800 px-3.5 py-2 rounded-xl text-center min-w-[60px]">
+              <span className="text-xl sm:text-2xl font-black text-yellow-400">{String(secondsLeft).padStart(2, '0')}</span>
+              <span className="block text-[10px] text-zinc-500 font-sans font-medium uppercase tracking-wider">Secs</span>
+            </div>
+          </div>
+        </div>
+
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
           <div>
             <h1 className="text-2xl font-bold">Analytics & Revenue</h1>
