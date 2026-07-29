@@ -1,11 +1,9 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
-import type { Staff } from '../types';
+import type { Staff, AdminTab } from '../types';
 import { Plus, Pencil, Trash2, Search, Phone, CreditCard, Calendar, Wallet } from 'lucide-react';
 import Modal from '../components/Modal';
 import { formatPKR, formatDate } from '../lib/format';
-
-type AdminTab = 'menu' | 'inventory' | 'analytics' | 'staff';
 
 interface StaffManagementProps {
   onLogout: () => void;
@@ -204,13 +202,14 @@ export default function StaffManagement({ onLogout, onNavigate, activeTab }: Sta
           </button>
         </div>
         {/* Tabs */}
-        <div className="max-w-6xl mx-auto px-4 flex gap-1 overflow-x-auto">
+        <div className="max-w-6xl mx-auto px-4 flex gap-1 overflow-x-auto scrollbar-none">
           {(
             [
               { key: 'menu', label: 'Menu Management' },
               { key: 'inventory', label: 'Inventory' },
               { key: 'staff', label: 'Staff' },
               { key: 'analytics', label: 'Analytics' },
+              { key: 'expenses', label: 'Expenses' },
             ] as const
           ).map((tab) => (
             <button

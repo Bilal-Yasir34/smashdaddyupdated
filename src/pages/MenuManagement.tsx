@@ -1,11 +1,9 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
-import type { MenuItem, InventoryItem } from '../types';
+import type { MenuItem, InventoryItem, AdminTab } from '../types';
 import { Plus, Pencil, Trash2, Search, Package } from 'lucide-react';
 import Modal from '../components/Modal';
 import { formatPKR } from '../lib/format';
-
-type AdminTab = 'menu' | 'inventory' | 'analytics' | 'staff';
 
 interface MenuManagementProps {
   onLogout: () => void;
@@ -249,13 +247,14 @@ export default function MenuManagement({ onLogout, onNavigate, activeTab }: Menu
           </button>
         </div>
         {/* Tabs */}
-        <div className="max-w-6xl mx-auto px-4 flex gap-1">
+        <div className="max-w-6xl mx-auto px-4 flex gap-1 overflow-x-auto scrollbar-none">
           {(
             [
               { key: 'menu', label: 'Menu Management' },
               { key: 'inventory', label: 'Inventory' },
               { key: 'staff', label: 'Staff' },
               { key: 'analytics', label: 'Analytics' },
+              { key: 'expenses', label: 'Expenses' },
             ] as const
           ).map((tab) => (
             <button

@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
-import type { Order, OrderItem } from '../types';
+import type { Order, OrderItem, Expense, AdminTab } from '../types';
 import { formatPKR, formatDateTime } from '../lib/format';
-import { TrendingUp, ShoppingBag, Receipt, Trash2, Calendar, AlertTriangle, Clock } from 'lucide-react';
+import { TrendingUp, ShoppingBag, Receipt, Trash2, Calendar, AlertTriangle, Clock, Wallet, DollarSign } from 'lucide-react';
 import Modal from '../components/Modal';
 import { CLEAR_SALES_PASSWORD } from '../lib/auth';
 
@@ -10,8 +10,8 @@ type Period = 'day' | 'week' | 'month' | 'year' | 'custom';
 
 interface AnalyticsProps {
   onLogout: () => void;
-  onNavigate: (tab: 'menu' | 'inventory' | 'analytics' | 'staff') => void;
-  activeTab: 'menu' | 'inventory' | 'analytics' | 'staff';
+  onNavigate: (tab: AdminTab) => void;
+  activeTab: AdminTab;
 }
 
 interface ItemSold {
@@ -32,6 +32,7 @@ export default function Analytics({ onLogout, onNavigate, activeTab }: Analytics
   });
   const [orders, setOrders] = useState<Order[]>([]);
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
   const [loading, setLoading] = useState(true);
   const [clearOpen, setClearOpen] = useState(false);
   const [clearPassword, setClearPassword] = useState('');
@@ -50,8 +51,10 @@ export default function Analytics({ onLogout, onNavigate, activeTab }: Analytics
     setLoading(true);
     const { data: o } = await supabase.from('orders').select('*').order('created_at', { ascending: false });
     const { data: oi } = await supabase.from('order_items').select('*');
+    const { data: exp } = await supabase.from('expenses').select('*');
     setOrders((o as Order[]) ?? []);
     setOrderItems((oi as OrderItem[]) ?? []);
+    setExpenses((exp as Expense[]) ?? []);
     setLoading(false);
   }, []);
 
@@ -100,6 +103,7 @@ export default function Analytics({ onLogout, onNavigate, activeTab }: Analytics
   }
 
   let periodOrders: Order[] = [];
+  let periodExpenses: Expense[] = [];
   if (period === 'custom') {
     const [sYear, sMonth, sDay] = startDate.split('-').map(Number);
     const start = new Date(sYear, sMonth - 1, sDay, 2, 0, 0, 0);
@@ -112,10 +116,17 @@ export default function Analytics({ onLogout, onNavigate, activeTab }: Analytics
       const created = new Date(o.created_at);
       return created >= start && created <= end;
     });
+    periodExpenses = expenses.filter((e) => {
+      const expDate = new Date(e.expense_date);
+      return expDate >= start && expDate <= end;
+    });
   } else {
     const periodStart = getStartOfPeriod(period, now);
     periodOrders = orders.filter((o) => new Date(o.created_at) >= periodStart);
+    periodExpenses = expenses.filter((e) => new Date(e.expense_date) >= periodStart);
   }
+
+  const totalExpenses = periodExpenses.reduce((s, e) => s + Number(e.amount), 0);
 
   // Revenue is only registered after order status is updated to Served
   const servedOrders = periodOrders.filter((o) => !o.status || o.status === 'Served');
@@ -186,13 +197,14 @@ export default function Analytics({ onLogout, onNavigate, activeTab }: Analytics
             Logout
           </button>
         </div>
-        <div className="max-w-6xl mx-auto px-4 flex gap-1">
+        <div className="max-w-6xl mx-auto px-4 flex gap-1 overflow-x-auto scrollbar-none">
           {(
             [
               { key: 'menu', label: 'Menu Management' },
               { key: 'inventory', label: 'Inventory' },
               { key: 'staff', label: 'Staff' },
               { key: 'analytics', label: 'Analytics' },
+              { key: 'expenses', label: 'Expenses' },
             ] as const
           ).map((tab) => (
             <button
@@ -314,7 +326,7 @@ export default function Analytics({ onLogout, onNavigate, activeTab }: Analytics
         ) : (
           <>
             {/* Stat cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
               <StatCard
                 icon={<TrendingUp />}
                 label="Total Revenue"
@@ -322,14 +334,19 @@ export default function Analytics({ onLogout, onNavigate, activeTab }: Analytics
                 accent
               />
               <StatCard
-                icon={<Receipt />}
-                label="Orders"
-                value={String(totalOrders)}
+                icon={<Wallet className="text-red-400" />}
+                label="Total Expenses"
+                value={formatPKR(totalExpenses)}
               />
               <StatCard
-                icon={<ShoppingBag />}
-                label="Items Sold"
-                value={String(totalItemsSold)}
+                icon={<DollarSign className={totalRevenue - totalExpenses >= 0 ? "text-yellow-400" : "text-red-400"} />}
+                label="Net Profit"
+                value={formatPKR(totalRevenue - totalExpenses)}
+              />
+              <StatCard
+                icon={<Receipt />}
+                label="Total Orders"
+                value={String(totalOrders)}
               />
             </div>
 

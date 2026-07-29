@@ -74,3 +74,17 @@ export interface InventoryItem {
   created_at: string;
   updated_at: string;
 }
+
+export type AdminTab = 'menu' | 'inventory' | 'staff' | 'analytics' | 'expenses';
+
+export interface Expense {
+  id: string;
+  title: string;
+  category: string;
+  description: string | null;
+  amount: number;
+  expense_date: string;
+  created_at: string;
+  updated_at?: string;
+}
+

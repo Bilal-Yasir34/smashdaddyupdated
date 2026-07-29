@@ -5,11 +5,12 @@ import MenuManagement from './pages/MenuManagement';
 import InventoryManagement from './pages/InventoryManagement';
 import StaffManagement from './pages/StaffManagement';
 import Analytics from './pages/Analytics';
+import Expenses from './pages/Expenses';
 import OrderModule from './pages/OrderModule';
 import { isAdminLoggedIn, logoutAdmin } from './lib/auth';
+import type { AdminTab } from './types';
 
 type View = 'landing' | 'admin-login' | 'admin' | 'order';
-type AdminTab = 'menu' | 'inventory' | 'analytics' | 'staff';
 
 export default function App() {
   const [view, setView] = useState<View>('landing');
@@ -68,8 +69,14 @@ export default function App() {
         <StaffManagement onLogout={handleLogout} onNavigate={setAdminTab} activeTab={adminTab} />
       );
     }
+    if (adminTab === 'expenses') {
+      return (
+        <Expenses onLogout={handleLogout} onNavigate={setAdminTab} activeTab={adminTab} />
+      );
+    }
     return <Analytics onLogout={handleLogout} onNavigate={setAdminTab} activeTab={adminTab} />;
   }
 
   return null;
 }
+

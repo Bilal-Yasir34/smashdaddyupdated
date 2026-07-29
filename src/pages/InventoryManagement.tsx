@@ -1,10 +1,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
-import type { InventoryItem } from '../types';
+import type { InventoryItem, AdminTab } from '../types';
 import { Plus, Pencil, Trash2, Search, Minus, AlertTriangle } from 'lucide-react';
 import Modal from '../components/Modal';
-
-type AdminTab = 'menu' | 'inventory' | 'analytics' | 'staff';
 
 interface InventoryManagementProps {
   onLogout: () => void;
@@ -171,13 +169,14 @@ export default function InventoryManagement({
           </button>
         </div>
         {/* Tabs */}
-        <div className="max-w-6xl mx-auto px-4 flex gap-1">
+        <div className="max-w-6xl mx-auto px-4 flex gap-1 overflow-x-auto scrollbar-none">
           {(
             [
               { key: 'menu', label: 'Menu Management' },
               { key: 'inventory', label: 'Inventory' },
               { key: 'staff', label: 'Staff' },
               { key: 'analytics', label: 'Analytics' },
+              { key: 'expenses', label: 'Expenses' },
             ] as const
           ).map((tab) => (
             <button
