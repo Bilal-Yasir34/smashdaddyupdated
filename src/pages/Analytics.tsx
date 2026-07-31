@@ -2,7 +2,8 @@ import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import type { Order, OrderItem, Expense, AdminTab } from '../types';
 import { formatPKR, formatDateTime } from '../lib/format';
-import { TrendingUp, ShoppingBag, Receipt, Trash2, Calendar, AlertTriangle, Clock, Wallet, DollarSign } from 'lucide-react';
+import ThemeToggle from '../components/ThemeToggle';
+import { TrendingUp, ShoppingBag, Receipt, Trash2, Calendar, AlertTriangle, Clock, Wallet, DollarSign, Utensils, Package, Users, BarChart3 } from 'lucide-react';
 import Modal from '../components/Modal';
 import { CLEAR_SALES_PASSWORD } from '../lib/auth';
 
@@ -190,32 +191,36 @@ export default function Analytics({ onLogout, onNavigate, activeTab }: Analytics
             </span>
             <span className="text-xs text-zinc-500 hidden sm:inline">Admin</span>
           </div>
-          <button
-            onClick={onLogout}
-            className="text-sm text-zinc-400 hover:text-red-400 transition-colors"
-          >
-            Logout
-          </button>
+          <div className="flex items-center gap-3">
+            <ThemeToggle />
+            <button
+              onClick={onLogout}
+              className="text-sm text-zinc-400 hover:text-red-400 transition-colors font-medium"
+            >
+              Logout
+            </button>
+          </div>
         </div>
         <div className="max-w-6xl mx-auto px-4 flex gap-1 overflow-x-auto scrollbar-none">
           {(
             [
-              { key: 'menu', label: 'Menu Management' },
-              { key: 'inventory', label: 'Inventory' },
-              { key: 'staff', label: 'Staff' },
-              { key: 'analytics', label: 'Analytics' },
-              { key: 'expenses', label: 'Expenses' },
+              { key: 'menu', label: 'Menu Management', icon: Utensils },
+              { key: 'inventory', label: 'Inventory', icon: Package },
+              { key: 'staff', label: 'Staff', icon: Users },
+              { key: 'analytics', label: 'Analytics', icon: BarChart3 },
+              { key: 'expenses', label: 'Expenses', icon: Wallet },
             ] as const
           ).map((tab) => (
             <button
               key={tab.key}
               onClick={() => onNavigate(tab.key)}
-              className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-all ${
+              className={`px-4 py-2.5 text-sm font-bold border-b-2 transition-all flex items-center gap-2 whitespace-nowrap ${
                 activeTab === tab.key
                   ? 'border-yellow-400 text-yellow-400'
                   : 'border-transparent text-zinc-500 hover:text-zinc-300'
               }`}
             >
+              <tab.icon size={15} />
               {tab.label}
             </button>
           ))}
@@ -347,6 +352,7 @@ export default function Analytics({ onLogout, onNavigate, activeTab }: Analytics
                 icon={<Receipt />}
                 label="Total Orders"
                 value={String(totalOrders)}
+                subtext={`${totalItemsSold} items sold`}
               />
             </div>
 
@@ -531,11 +537,13 @@ function StatCard({
   icon,
   label,
   value,
+  subtext,
   accent,
 }: {
   icon: React.ReactNode;
   label: string;
   value: string;
+  subtext?: string;
   accent?: boolean;
 }) {
   return (
@@ -553,6 +561,11 @@ function StatCard({
         </span>
       </div>
       <p className="text-3xl font-black">{value}</p>
+      {subtext && (
+        <p className={`text-xs mt-1 ${accent ? 'text-black/60 font-semibold' : 'text-zinc-500'}`}>
+          {subtext}
+        </p>
+      )}
     </div>
   );
 }

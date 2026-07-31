@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import Logo from '../components/Logo';
 import Modal from '../components/Modal';
+import ThemeToggle from '../components/ThemeToggle';
 
 interface OrderModuleProps {
   onBack: () => void;
@@ -39,6 +40,33 @@ type PortalSection = 'menu' | 'kds';
 
 interface KDSOrder extends Order {
   items: OrderItem[];
+}
+
+export function isDrinkItem(item: { name: string; category?: string | null }): boolean {
+  const cat = (item.category || '').toLowerCase();
+  const name = (item.name || '').toLowerCase();
+  return (
+    cat.includes('drink') ||
+    cat.includes('beverage') ||
+    cat.includes('soda') ||
+    cat.includes('shake') ||
+    cat.includes('juice') ||
+    cat.includes('tea') ||
+    cat.includes('coffee') ||
+    cat.includes('water') ||
+    name.includes('drink') ||
+    name.includes('coke') ||
+    name.includes('sprite') ||
+    name.includes('fanta') ||
+    name.includes('pepsi') ||
+    name.includes('7up') ||
+    name.includes('water') ||
+    name.includes('shake') ||
+    name.includes('soda') ||
+    name.includes('mojito') ||
+    name.includes('lemonade') ||
+    name.includes('slush')
+  );
 }
 
 export function formatOrderDisplayNumber(order: { id: string; order_number?: string | null } | null | undefined): string {
@@ -57,7 +85,10 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
   const [search, setSearch] = useState('');
   const [cart, setCart] = useState<CartLine[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
-  const [discountPercent, setDiscountPercent] = useState<number>(0);
+  const [discountType, setDiscountType] = useState<'percent' | 'amount'>('percent');
+  const [discountValue, setDiscountValue] = useState<number>(3);
+  const [userHasOverriddenDiscount, setUserHasOverriddenDiscount] = useState<boolean>(false);
+  const [paymentStatus, setPaymentStatus] = useState<'paid' | 'unpaid'>('paid');
   const [orderInstructions, setOrderInstructions] = useState<string>('');
   const [customerName, setCustomerName] = useState<string>('');
   const [orderType, setOrderType] = useState<OrderType>('Dine In');
@@ -93,7 +124,9 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
   const [editCustomerName, setEditCustomerName] = useState<string>('');
   const [editOrderType, setEditOrderType] = useState<OrderType>('Dine In');
   const [editInstructions, setEditInstructions] = useState<string>('');
-  const [editDiscountPercent, setEditDiscountPercent] = useState<number>(0);
+  const [editDiscountType, setEditDiscountType] = useState<'percent' | 'amount'>('percent');
+  const [editDiscountValue, setEditDiscountValue] = useState<number>(0);
+  const [editPaymentStatus, setEditPaymentStatus] = useState<'paid' | 'unpaid'>('paid');
   const [editPaymentMethod, setEditPaymentMethod] = useState<'cash' | 'card'>('cash');
   const [editSaving, setEditSaving] = useState<boolean>(false);
   const [selectedAddItem, setSelectedAddItem] = useState<string>('');
@@ -191,9 +224,38 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
     setCart((prev) => prev.filter((l) => l.item.id !== itemId));
   }
 
+  // Auto-calculate default discount (3% default, 0% if cart contains ONLY drinks)
+  useEffect(() => {
+    if (userHasOverriddenDiscount) return;
+    if (cart.length === 0) {
+      setDiscountType('percent');
+      setDiscountValue(0);
+      return;
+    }
+    const isDrinksOnly = cart.every((l) => isDrinkItem(l.item));
+    if (isDrinksOnly) {
+      setDiscountType('percent');
+      setDiscountValue(0);
+    } else {
+      setDiscountType('percent');
+      setDiscountValue(3);
+    }
+  }, [cart, userHasOverriddenDiscount]);
+
   const subtotal = cart.reduce((s, l) => s + Number(l.item.price) * l.quantity, 0);
-  const validDiscountPercent = Math.max(0, Math.min(100, isNaN(discountPercent) ? 0 : discountPercent));
-  const discountAmount = Math.round((subtotal * validDiscountPercent) / 100);
+  const isDrinksOnly = cart.length > 0 && cart.every((l) => isDrinkItem(l.item));
+
+  let validDiscountPercent = 0;
+  let discountAmount = 0;
+
+  if (discountType === 'percent') {
+    validDiscountPercent = Math.max(0, Math.min(100, isNaN(discountValue) ? 0 : discountValue));
+    discountAmount = Math.round((subtotal * validDiscountPercent) / 100);
+  } else {
+    discountAmount = Math.min(subtotal, Math.max(0, isNaN(discountValue) ? 0 : discountValue));
+    validDiscountPercent = subtotal > 0 ? Math.round((discountAmount / subtotal) * 100) : 0;
+  }
+
   const cartTotal = Math.max(0, subtotal - discountAmount);
   const cartCount = cart.reduce((s, l) => s + l.quantity, 0);
 
@@ -241,6 +303,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
       discount_percent: validDiscountPercent,
       discount_amount: discountAmount,
       payment_method: paymentMethod,
+      payment_status: paymentStatus,
       status: 'Being Prepared',
       instructions: orderInstructions.trim() || null,
       customer_name: customerName.trim() || null,
@@ -249,6 +312,17 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
     };
 
     let orderRes = await supabase.from('orders').insert(fullPayload).select().single();
+
+    // Fallback 1: Try without payment_status if DB schema lacks 'payment_status' column
+    if (orderRes.error) {
+      console.warn('Full payload insert failed, trying without payment_status:', orderRes.error);
+      const { payment_status, ...payloadWithoutPaymentStatus } = fullPayload;
+      orderRes = await supabase
+        .from('orders')
+        .insert(payloadWithoutPaymentStatus)
+        .select()
+        .single();
+    }
 
     // Fallback 1: Try without order_number if DB schema lacks 'order_number' column
     if (orderRes.error) {
@@ -348,7 +422,10 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
 
   function resetOrder() {
     setCart([]);
-    setDiscountPercent(0);
+    setDiscountType('percent');
+    setDiscountValue(3);
+    setUserHasOverriddenDiscount(false);
+    setPaymentStatus('paid');
     setOrderInstructions('');
     setCustomerName('');
     setOrderType('Dine In');
@@ -472,12 +549,29 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
     }
   }
 
+  async function updateOrderPaymentStatus(orderId: string, newPaymentStatus: 'paid' | 'unpaid') {
+    setKdsOrders((prev) =>
+      prev.map((o) => (o.id === orderId ? { ...o, payment_status: newPaymentStatus } : o)),
+    );
+    const { error } = await supabase
+      .from('orders')
+      .update({ payment_status: newPaymentStatus })
+      .eq('id', orderId);
+
+    if (error) {
+      console.error('Failed to update payment status:', error);
+      loadKdsOrders();
+    }
+  }
+
   function openEditOrder(order: KDSOrder) {
     setEditingOrder(order);
     setEditCustomerName(order.customer_name || '');
     setEditOrderType(order.order_type || 'Dine In');
     setEditInstructions(order.instructions || '');
-    setEditDiscountPercent(order.discount_percent || 0);
+    setEditDiscountType('percent');
+    setEditDiscountValue(order.discount_percent || 0);
+    setEditPaymentStatus(order.payment_status || 'paid');
     setEditPaymentMethod(order.payment_method || 'cash');
     setSelectedAddItem('');
     setEditItems(
@@ -496,8 +590,17 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
     setEditSaving(true);
 
     const editSubtotal = editItems.reduce((acc, it) => acc + it.item_price * it.quantity, 0);
-    const editValidDiscount = Math.max(0, Math.min(100, isNaN(editDiscountPercent) ? 0 : editDiscountPercent));
-    const editDiscountAmount = Math.round((editSubtotal * editValidDiscount) / 100);
+    let editValidDiscount = 0;
+    let editDiscountAmount = 0;
+
+    if (editDiscountType === 'percent') {
+      editValidDiscount = Math.max(0, Math.min(100, isNaN(editDiscountValue) ? 0 : editDiscountValue));
+      editDiscountAmount = Math.round((editSubtotal * editValidDiscount) / 100);
+    } else {
+      editDiscountAmount = Math.min(editSubtotal, Math.max(0, isNaN(editDiscountValue) ? 0 : editDiscountValue));
+      editValidDiscount = editSubtotal > 0 ? Math.round((editDiscountAmount / editSubtotal) * 100) : 0;
+    }
+
     const editTotalAmount = Math.max(0, editSubtotal - editDiscountAmount);
 
     const updatePayload = {
@@ -506,6 +609,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
       discount_percent: editValidDiscount,
       discount_amount: editDiscountAmount,
       payment_method: editPaymentMethod,
+      payment_status: editPaymentStatus,
       customer_name: editCustomerName.trim() || null,
       order_type: editOrderType,
       instructions: editInstructions.trim() || null,
@@ -518,7 +622,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
 
     if (ordErr) {
       console.warn('Update full order failed, trying without extra fields:', ordErr);
-      const { order_type, customer_name, instructions, ...basicPayload } = updatePayload;
+      const { payment_status, order_type, customer_name, instructions, ...basicPayload } = updatePayload;
       await supabase.from('orders').update(basicPayload).eq('id', editingOrder.id);
     }
 
@@ -667,6 +771,8 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
           </div>
 
           <div className="flex items-center gap-3">
+            <ThemeToggle />
+
             {/* Section Switcher Tabs */}
             <div className="flex bg-zinc-950 p-1 rounded-xl border border-zinc-800">
               <button
@@ -756,23 +862,36 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                           <button
                             key={item.id}
                             onClick={() => addToCart(item)}
-                            className="group relative text-left bg-zinc-900 border border-zinc-800 rounded-xl p-4 hover:border-yellow-400/50 hover:bg-zinc-800/50 transition-all active:scale-95 animate-[fadeIn_0.3s_ease-out]"
+                            className={`group relative text-left glass-card border rounded-2xl p-4 transition-all duration-200 hover:-translate-y-0.5 active:scale-95 flex flex-col justify-between ${
+                              inCart
+                                ? 'border-yellow-400/80 shadow-md shadow-yellow-400/10'
+                                : 'border-zinc-800/80 hover:border-yellow-400/50'
+                            }`}
                           >
-                            <h3 className="font-semibold text-sm leading-tight">{item.name}</h3>
-                            {item.description && (
-                              <p className="text-zinc-500 text-xs mt-1 line-clamp-2">
-                                {item.description}
-                              </p>
-                            )}
-                            <p className="text-yellow-400 font-bold mt-2">{formatPKR(item.price)}</p>
-                            {inCart && (
-                              <span className="absolute top-2 right-2 bg-yellow-400 text-black text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center animate-[scaleIn_0.2s_ease-out]">
-                                {inCart.quantity}
+                            <div>
+                              <div className="flex items-start justify-between gap-2">
+                                <h3 className="font-bold text-sm leading-tight text-white group-hover:text-yellow-400 transition-colors">
+                                  {item.name}
+                                </h3>
+                                {inCart && (
+                                  <span className="bg-yellow-400 text-black text-[10px] font-black px-2 py-0.5 rounded-full shrink-0 shadow-sm animate-[scaleIn_0.2s_ease-out]">
+                                    {inCart.quantity} in cart
+                                  </span>
+                                )}
+                              </div>
+                              {item.description && (
+                                <p className="text-zinc-500 text-xs mt-1.5 line-clamp-2">
+                                  {item.description}
+                                </p>
+                              )}
+                            </div>
+
+                            <div className="flex items-center justify-between mt-3 pt-2 border-t border-zinc-800/50">
+                              <span className="text-yellow-400 font-extrabold text-sm font-mono">{formatPKR(item.price)}</span>
+                              <span className="w-7 h-7 rounded-xl bg-yellow-400/10 text-yellow-400 group-hover:bg-yellow-400 group-hover:text-black flex items-center justify-center transition-all font-bold">
+                                <Plus size={15} />
                               </span>
-                            )}
-                            <span className="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <Plus className="text-yellow-400" size={18} />
-                            </span>
+                            </div>
                           </button>
                         );
                       })}
@@ -821,8 +940,11 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                     >
                       <span>{st}</span>
                       <span
-                        className={`px-1.5 py-0.2 rounded-full text-[10px] ${kdsFilter === st ? 'bg-black/20 text-black' : 'bg-zinc-800 text-zinc-300'
-                          }`}
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                          kdsFilter === st
+                            ? 'bg-black/20 text-black'
+                            : 'bg-zinc-200 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-300'
+                        }`}
                       >
                         {count}
                       </span>
@@ -844,6 +966,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                 )}
                 nowMs={nowMs}
                 onUpdateStatus={updateOrderStatus}
+                onUpdatePaymentStatus={updateOrderPaymentStatus}
                 onEditOrder={openEditOrder}
                 onDeleteOrder={(ord) => setDeletingOrder(ord)}
                 onReprintReceipt={reprintOrderReceipt}
@@ -873,207 +996,290 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
         maxWidth="max-w-lg"
       >
         {checkoutStep === 'cart' && (
-          <div className="space-y-4">
+          <div className="space-y-3.5">
             {cart.length === 0 ? (
-              <p className="text-center text-zinc-500 py-8">Your cart is empty. Add items from the menu.</p>
+              <div className="text-center py-10 space-y-2">
+                <ShoppingCart className="mx-auto text-zinc-600" size={36} />
+                <p className="text-zinc-400 text-sm font-medium">Your cart is empty.</p>
+                <p className="text-zinc-600 text-xs">Add items from the menu to build an order.</p>
+              </div>
             ) : (
               <>
-                <div className="space-y-2 max-h-[35vh] overflow-y-auto pr-1">
-                  {cart.map((line) => (
-                    <div
-                      key={line.item.id}
-                      className="flex items-center gap-3 bg-zinc-950 border border-zinc-800 rounded-xl p-3 animate-[fadeIn_0.2s_ease-out]"
+                {/* 1. Cart Items List */}
+                <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-2.5 space-y-2">
+                  <div className="flex items-center justify-between px-1 pb-1 border-b border-zinc-800/60">
+                    <span className="text-xs font-bold text-zinc-400 uppercase tracking-wider">
+                      Cart Items ({cartCount})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={resetOrder}
+                      className="text-[11px] text-zinc-500 hover:text-red-400 font-medium transition-colors"
                     >
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium text-sm truncate">{line.item.name}</p>
-                        <p className="text-zinc-500 text-xs">{formatPKR(line.item.price)} each</p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => updateQty(line.item.id, -1)}
-                          className="w-7 h-7 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center transition-colors"
-                        >
-                          <Minus size={14} />
-                        </button>
-                        <span className="w-6 text-center font-bold">{line.quantity}</span>
-                        <button
-                          onClick={() => updateQty(line.item.id, 1)}
-                          className="w-7 h-7 rounded-lg bg-yellow-400 text-black hover:bg-yellow-300 flex items-center justify-center transition-colors"
-                        >
-                          <Plus size={14} />
-                        </button>
-                      </div>
-                      <span className="w-20 text-right font-bold text-sm">
-                        {formatPKR(Number(line.item.price) * line.quantity)}
-                      </span>
-                      <button
-                        onClick={() => removeLine(line.item.id)}
-                        className="text-zinc-600 hover:text-red-400 transition-colors"
+                      Clear All
+                    </button>
+                  </div>
+
+                  <div className="space-y-2 max-h-[30vh] overflow-y-auto pr-1">
+                    {cart.map((line) => (
+                      <div
+                        key={line.item.id}
+                        className="flex items-center gap-3 bg-zinc-900/80 border border-zinc-800/80 rounded-xl p-2.5 transition-all"
                       >
-                        <X size={16} />
-                      </button>
-                    </div>
-                  ))}
+                        <div className="flex-1 min-w-0">
+                          <p className="font-semibold text-xs text-white truncate">{line.item.name}</p>
+                          <p className="text-zinc-400 text-[11px]">{formatPKR(line.item.price)} each</p>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => updateQty(line.item.id, -1)}
+                            className="w-6 h-6 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center transition-colors"
+                          >
+                            <Minus size={13} />
+                          </button>
+                          <span className="w-5 text-center font-bold text-xs text-white">{line.quantity}</span>
+                          <button
+                            type="button"
+                            onClick={() => updateQty(line.item.id, 1)}
+                            className="w-6 h-6 rounded-lg bg-yellow-400 text-black hover:bg-yellow-300 flex items-center justify-center transition-colors font-bold"
+                          >
+                            <Plus size={13} />
+                          </button>
+                        </div>
+                        <span className="w-16 text-right font-bold text-xs text-yellow-400">
+                          {formatPKR(Number(line.item.price) * line.quantity)}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => removeLine(line.item.id)}
+                          className="text-zinc-500 hover:text-red-400 p-1 transition-colors"
+                        >
+                          <X size={15} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
 
-                {/* Discount Section */}
+                {/* 2. Order Configuration: Order Type & Payment Status */}
+                <div className="grid grid-cols-2 gap-2">
+                  {/* Order Type Selector */}
+                  <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-2.5 space-y-1.5">
+                    <label className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider block">
+                      Order Type
+                    </label>
+                    <div className="grid grid-cols-2 gap-1 bg-zinc-900 p-1 rounded-lg border border-zinc-800">
+                      <button
+                        type="button"
+                        onClick={() => setOrderType('Dine In')}
+                        className={`py-1.5 rounded text-[11px] font-bold transition-all flex items-center justify-center gap-1 ${
+                          orderType === 'Dine In'
+                            ? 'bg-yellow-400 text-black shadow-sm'
+                            : 'text-zinc-400 hover:text-white'
+                        }`}
+                      >
+                        <UtensilsCrossed size={12} /> Dine In
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setOrderType('Take Away')}
+                        className={`py-1.5 rounded text-[11px] font-bold transition-all flex items-center justify-center gap-1 ${
+                          orderType === 'Take Away'
+                            ? 'bg-yellow-400 text-black shadow-sm'
+                            : 'text-zinc-400 hover:text-white'
+                        }`}
+                      >
+                        <ShoppingBag size={12} /> Take Away
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Payment Status Selector */}
+                  <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-2.5 space-y-1.5">
+                    <label className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider block">
+                      Payment Status
+                    </label>
+                    <div className="grid grid-cols-2 gap-1 bg-zinc-900 p-1 rounded-lg border border-zinc-800">
+                      <button
+                        type="button"
+                        onClick={() => setPaymentStatus('paid')}
+                        className={`py-1.5 rounded text-[11px] font-bold transition-all flex items-center justify-center gap-1 ${
+                          paymentStatus === 'paid'
+                            ? 'bg-emerald-500 text-black shadow-sm'
+                            : 'text-zinc-400 hover:text-white'
+                        }`}
+                      >
+                        <CheckCircle size={12} /> Paid
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPaymentStatus('unpaid')}
+                        className={`py-1.5 rounded text-[11px] font-bold transition-all flex items-center justify-center gap-1 ${
+                          paymentStatus === 'unpaid'
+                            ? 'bg-rose-500 text-white shadow-sm'
+                            : 'text-zinc-400 hover:text-white'
+                        }`}
+                      >
+                        <XCircle size={12} /> Unpaid
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3. Customer Info & Special Instructions */}
+                <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-2.5 space-y-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[11px] font-semibold text-zinc-400 flex items-center gap-1 mb-1">
+                        <User size={12} className="text-yellow-400" /> Customer Name
+                      </label>
+                      <input
+                        type="text"
+                        value={customerName}
+                        onChange={(e) => setCustomerName(e.target.value)}
+                        placeholder="Name (optional)..."
+                        className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-zinc-600 focus:border-yellow-400 outline-none transition-colors"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-semibold text-zinc-400 flex items-center gap-1 mb-1">
+                        <FileText size={12} className="text-yellow-400" /> Instructions
+                      </label>
+                      <input
+                        type="text"
+                        value={orderInstructions}
+                        onChange={(e) => setOrderInstructions(e.target.value)}
+                        placeholder="Instructions (e.g. extra spicy)..."
+                        className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-zinc-600 focus:border-yellow-400 outline-none transition-colors"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4. Discount Section */}
                 <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-3 space-y-2.5">
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
                       <Percent size={14} className="text-yellow-400" /> Apply Discount
                     </label>
-                    <span className="text-xs text-zinc-400">
-                      {validDiscountPercent > 0 ? `-${formatPKR(discountAmount)}` : 'No Discount'}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1 bg-zinc-900 border border-zinc-800 p-0.5 rounded-lg">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDiscountType('percent');
+                            setUserHasOverriddenDiscount(true);
+                          }}
+                          className={`px-2 py-0.5 text-[10px] rounded font-bold transition-all ${
+                            discountType === 'percent'
+                              ? 'bg-yellow-400 text-black'
+                              : 'text-zinc-400 hover:text-white'
+                          }`}
+                        >
+                          %
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDiscountType('amount');
+                            setUserHasOverriddenDiscount(true);
+                          }}
+                          className={`px-2 py-0.5 text-[10px] rounded font-bold transition-all ${
+                            discountType === 'amount'
+                              ? 'bg-yellow-400 text-black'
+                              : 'text-zinc-400 hover:text-white'
+                          }`}
+                        >
+                          Rs
+                        </button>
+                      </div>
+                      <span className="text-xs font-bold text-green-400">
+                        {discountAmount > 0 ? `-${formatPKR(discountAmount)}` : 'No Discount'}
+                      </span>
+                    </div>
                   </div>
 
-                  {/* Preset Buttons */}
+                  {/* Drinks-only notice */}
+                  {isDrinksOnly && (
+                    <div className="text-[11px] text-amber-400/90 bg-amber-400/10 border border-amber-400/20 px-2.5 py-1 rounded-lg">
+                      🍹 Cart contains drinks only — 0% default discount applicable.
+                    </div>
+                  )}
+
+                  {/* Presets */}
                   <div className="flex items-center gap-1.5 flex-wrap">
-                    {[0, 5, 10, 15, 20].map((pct) => (
+                    {[0, 3, 5, 10, 15, 20].map((pct) => (
                       <button
                         key={pct}
                         type="button"
-                        onClick={() => setDiscountPercent(pct)}
-                        className={`px-2.5 py-1 text-xs rounded-lg font-bold transition-all ${validDiscountPercent === pct
-                          ? 'bg-yellow-400 text-black shadow-sm shadow-yellow-400/20'
-                          : 'bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white'
-                          }`}
+                        onClick={() => {
+                          setDiscountType('percent');
+                          setDiscountValue(pct);
+                          setUserHasOverriddenDiscount(true);
+                        }}
+                        className={`px-2.5 py-1 text-xs rounded-lg font-bold transition-all ${
+                          discountType === 'percent' && validDiscountPercent === pct
+                            ? 'bg-yellow-400 text-black shadow-sm shadow-yellow-400/20'
+                            : 'bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white'
+                        }`}
                       >
                         {pct}%
                       </button>
                     ))}
                   </div>
 
-                  {/* Custom Input */}
+                  {/* Custom Discount Input */}
                   <div className="flex items-center gap-2 pt-1">
-                    <span className="text-xs text-zinc-500">Custom Discount (%):</span>
+                    <span className="text-xs text-zinc-500 whitespace-nowrap">
+                      Custom ({discountType === 'percent' ? '%' : 'Rs'}):
+                    </span>
                     <div className="relative flex-1">
                       <input
                         type="number"
                         min="0"
-                        max="100"
-                        value={discountPercent === 0 ? '' : discountPercent}
+                        value={discountValue === 0 ? '' : discountValue}
                         onChange={(e) => {
                           const val = parseFloat(e.target.value);
-                          setDiscountPercent(isNaN(val) ? 0 : Math.min(100, Math.max(0, val)));
+                          setDiscountValue(isNaN(val) ? 0 : Math.max(0, val));
+                          setUserHasOverriddenDiscount(true);
                         }}
                         placeholder="0"
                         className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-white placeholder-zinc-600 focus:border-yellow-400 outline-none transition-colors"
                       />
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-zinc-500">%</span>
+                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-zinc-500">
+                        {discountType === 'percent' ? '%' : 'PKR'}
+                      </span>
                     </div>
                   </div>
                 </div>
 
-                {/* Order Type Selector (Dine In / Take Away) */}
+                {/* 5. Summary & Action Button */}
                 <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-3 space-y-2">
-                  <label className="text-xs font-semibold text-zinc-300 flex items-center justify-between">
-                    <span className="flex items-center gap-1.5">
-                      <UtensilsCrossed size={14} className="text-yellow-400" /> Order Type
-                    </span>
-                    <span className="text-[10px] font-bold text-yellow-400 uppercase tracking-wider bg-yellow-400/10 px-2 py-0.5 rounded border border-yellow-400/20">
-                      {orderType}
-                    </span>
-                  </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setOrderType('Dine In')}
-                      className={`flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs font-bold transition-all border ${
-                        orderType === 'Dine In'
-                          ? 'bg-yellow-400 text-black border-yellow-400 shadow-md shadow-yellow-400/10'
-                          : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:text-white hover:border-zinc-700'
-                      }`}
-                    >
-                      <UtensilsCrossed size={15} /> Dine In
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setOrderType('Take Away')}
-                      className={`flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs font-bold transition-all border ${
-                        orderType === 'Take Away'
-                          ? 'bg-yellow-400 text-black border-yellow-400 shadow-md shadow-yellow-400/10'
-                          : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:text-white hover:border-zinc-700'
-                      }`}
-                    >
-                      <ShoppingBag size={15} /> Take Away
-                    </button>
-                  </div>
-                </div>
-
-                {/* Customer Name Section */}
-                <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-3 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
-                      <User size={14} className="text-yellow-400" /> Customer Name
-                    </label>
-                    {customerName.trim() && (
-                      <button
-                        type="button"
-                        onClick={() => setCustomerName('')}
-                        className="text-[10px] text-zinc-500 hover:text-red-400 transition-colors font-medium"
-                      >
-                        Clear
-                      </button>
-                    )}
-                  </div>
-                  <input
-                    type="text"
-                    value={customerName}
-                    onChange={(e) => setCustomerName(e.target.value)}
-                    placeholder="Enter customer name (optional)..."
-                    className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white placeholder-zinc-600 focus:border-yellow-400 outline-none transition-colors"
-                  />
-                </div>
-
-                {/* Order Instructions Section */}
-                <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-3 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
-                      <FileText size={14} className="text-yellow-400" /> Order Instructions
-                    </label>
-                    {orderInstructions.trim() && (
-                      <button
-                        type="button"
-                        onClick={() => setOrderInstructions('')}
-                        className="text-[10px] text-zinc-500 hover:text-red-400 transition-colors font-medium"
-                      >
-                        Clear instructions
-                      </button>
-                    )}
-                  </div>
-                  <textarea
-                    value={orderInstructions}
-                    onChange={(e) => setOrderInstructions(e.target.value)}
-                    placeholder="Add order instructions (e.g. Extra spicy, no onions, sauce on side)..."
-                    rows={2}
-                    className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-2.5 text-xs text-white placeholder-zinc-600 focus:border-yellow-400 outline-none transition-colors resize-none"
-                  />
-                </div>
-
-                {/* Price Breakdown */}
-                <div className="border-t border-zinc-800 pt-3 space-y-1.5">
-                  <div className="flex justify-between text-sm text-zinc-400">
+                  <div className="flex justify-between text-xs text-zinc-400">
                     <span>Original Price</span>
                     <span>{formatPKR(subtotal)}</span>
                   </div>
-                  {validDiscountPercent > 0 && (
-                    <div className="flex justify-between text-sm text-green-400 font-medium">
-                      <span>Discount ({validDiscountPercent}%)</span>
+                  {discountAmount > 0 && (
+                    <div className="flex justify-between text-xs text-green-400 font-medium">
+                      <span>
+                        Discount {discountType === 'percent' ? `(${validDiscountPercent}%)` : '(Fixed Price)'}
+                      </span>
                       <span>-{formatPKR(discountAmount)}</span>
                     </div>
                   )}
-                  <div className="flex items-center justify-between pt-1">
-                    <span className="font-bold text-white">Order Total</span>
-                    <span className="text-2xl font-black text-yellow-400">{formatPKR(cartTotal)}</span>
+                  <div className="flex items-center justify-between border-t border-zinc-800 pt-2">
+                    <span className="font-bold text-xs text-white">Order Total</span>
+                    <span className="text-xl font-black text-yellow-400">{formatPKR(cartTotal)}</span>
                   </div>
                 </div>
 
                 <button
+                  type="button"
                   onClick={() => setCheckoutStep('payment')}
-                  className="w-full bg-yellow-400 hover:bg-yellow-300 text-black font-bold py-3 rounded-xl transition-all active:scale-95"
+                  className="w-full bg-yellow-400 hover:bg-yellow-300 text-black font-bold py-3 rounded-xl transition-all active:scale-95 text-xs shadow-md shadow-yellow-400/10"
                 >
-                  Proceed to Checkout
+                  Proceed to Payment
                 </button>
               </>
             )}
@@ -1459,26 +1665,8 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
               </div>
             </div>
 
-            {/* Discount & Payment Method */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-              <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1 flex items-center gap-1">
-                  <Percent size={13} className="text-yellow-400" /> Discount (%)
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  max="100"
-                  value={editDiscountPercent === 0 ? '' : editDiscountPercent}
-                  onChange={(e) => {
-                    const val = parseFloat(e.target.value);
-                    setEditDiscountPercent(isNaN(val) ? 0 : Math.min(100, Math.max(0, val)));
-                  }}
-                  placeholder="0"
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white focus:border-yellow-400 outline-none"
-                />
-              </div>
-
+            {/* Discount & Payment Controls */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
               <div>
                 <label className="block text-xs font-semibold text-zinc-300 mb-1 flex items-center gap-1">
                   <CreditCard size={13} className="text-yellow-400" /> Payment Method
@@ -1491,6 +1679,84 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                   <option value="cash">Cash</option>
                   <option value="card">Card / Online</option>
                 </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1 flex items-center gap-1">
+                  <CheckCircle size={13} className="text-yellow-400" /> Payment Status
+                </label>
+                <div className="grid grid-cols-2 gap-1 bg-zinc-950 border border-zinc-800 p-1 rounded-xl">
+                  <button
+                    type="button"
+                    onClick={() => setEditPaymentStatus('paid')}
+                    className={`py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      editPaymentStatus === 'paid'
+                        ? 'bg-emerald-500 text-black shadow-sm'
+                        : 'text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    Paid
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditPaymentStatus('unpaid')}
+                    className={`py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      editPaymentStatus === 'unpaid'
+                        ? 'bg-rose-500 text-white shadow-sm'
+                        : 'text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    Unpaid
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1">
+                    <Percent size={13} className="text-yellow-400" /> Discount
+                  </label>
+                  <div className="flex items-center gap-1 bg-zinc-950 border border-zinc-800 p-0.5 rounded-lg">
+                    <button
+                      type="button"
+                      onClick={() => setEditDiscountType('percent')}
+                      className={`px-1.5 py-0.5 text-[10px] rounded font-bold transition-all ${
+                        editDiscountType === 'percent'
+                          ? 'bg-yellow-400 text-black'
+                          : 'text-zinc-400 hover:text-white'
+                      }`}
+                    >
+                      %
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditDiscountType('amount')}
+                      className={`px-1.5 py-0.5 text-[10px] rounded font-bold transition-all ${
+                        editDiscountType === 'amount'
+                          ? 'bg-yellow-400 text-black'
+                          : 'text-zinc-400 hover:text-white'
+                      }`}
+                    >
+                      Rs
+                    </button>
+                  </div>
+                </div>
+                <div className="relative">
+                  <input
+                    type="number"
+                    min="0"
+                    value={editDiscountValue === 0 ? '' : editDiscountValue}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value);
+                      setEditDiscountValue(isNaN(val) ? 0 : Math.max(0, val));
+                    }}
+                    placeholder="0"
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white focus:border-yellow-400 outline-none"
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-zinc-500">
+                    {editDiscountType === 'percent' ? '%' : 'PKR'}
+                  </span>
+                </div>
               </div>
             </div>
 
@@ -1510,11 +1776,17 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
             {/* Price Summary */}
             {(() => {
               const editSubtotal = editItems.reduce((acc, it) => acc + it.item_price * it.quantity, 0);
-              const editValidDiscount = Math.max(
-                0,
-                Math.min(100, isNaN(editDiscountPercent) ? 0 : editDiscountPercent),
-              );
-              const editDiscountAmount = Math.round((editSubtotal * editValidDiscount) / 100);
+              let editValidDiscount = 0;
+              let editDiscountAmount = 0;
+
+              if (editDiscountType === 'percent') {
+                editValidDiscount = Math.max(0, Math.min(100, isNaN(editDiscountValue) ? 0 : editDiscountValue));
+                editDiscountAmount = Math.round((editSubtotal * editValidDiscount) / 100);
+              } else {
+                editDiscountAmount = Math.min(editSubtotal, Math.max(0, isNaN(editDiscountValue) ? 0 : editDiscountValue));
+                editValidDiscount = editSubtotal > 0 ? Math.round((editDiscountAmount / editSubtotal) * 100) : 0;
+              }
+
               const editTotalAmount = Math.max(0, editSubtotal - editDiscountAmount);
               return (
                 <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-3 space-y-1 text-xs">
@@ -1522,9 +1794,9 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                     <span>Subtotal:</span>
                     <span>{formatPKR(editSubtotal)}</span>
                   </div>
-                  {editValidDiscount > 0 && (
+                  {editDiscountAmount > 0 && (
                     <div className="flex justify-between text-green-400">
-                      <span>Discount ({editValidDiscount}%):</span>
+                      <span>Discount {editDiscountType === 'percent' ? `(${editValidDiscount}%)` : '(Fixed Price)'}:</span>
                       <span>-{formatPKR(editDiscountAmount)}</span>
                     </div>
                   )}
@@ -1624,6 +1896,7 @@ function KDSOrdersGrid({
   orders,
   nowMs,
   onUpdateStatus,
+  onUpdatePaymentStatus,
   onEditOrder,
   onDeleteOrder,
   onReprintReceipt,
@@ -1631,6 +1904,7 @@ function KDSOrdersGrid({
   orders: KDSOrder[];
   nowMs: number;
   onUpdateStatus: (orderId: string, newStatus: OrderStatus) => void;
+  onUpdatePaymentStatus: (orderId: string, newPaymentStatus: 'paid' | 'unpaid') => void;
   onEditOrder: (order: KDSOrder) => void;
   onDeleteOrder: (order: KDSOrder) => void;
   onReprintReceipt: (order: KDSOrder) => void;
@@ -1653,6 +1927,7 @@ function KDSOrdersGrid({
           order={order}
           nowMs={nowMs}
           onUpdateStatus={onUpdateStatus}
+          onUpdatePaymentStatus={onUpdatePaymentStatus}
           onEditOrder={onEditOrder}
           onDeleteOrder={onDeleteOrder}
           onReprintReceipt={onReprintReceipt}
@@ -1666,6 +1941,7 @@ function KDSCard({
   order,
   nowMs,
   onUpdateStatus,
+  onUpdatePaymentStatus,
   onEditOrder,
   onDeleteOrder,
   onReprintReceipt,
@@ -1673,6 +1949,7 @@ function KDSCard({
   order: KDSOrder;
   nowMs: number;
   onUpdateStatus: (orderId: string, newStatus: OrderStatus) => void;
+  onUpdatePaymentStatus: (orderId: string, newPaymentStatus: 'paid' | 'unpaid') => void;
   onEditOrder: (order: KDSOrder) => void;
   onDeleteOrder: (order: KDSOrder) => void;
   onReprintReceipt: (order: KDSOrder) => void;
@@ -1745,6 +2022,23 @@ function KDSCard({
               >
                 {order.payment_method === 'cash' ? 'Cash' : 'Card'}
               </span>
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdatePaymentStatus(
+                    order.id,
+                    order.payment_status === 'paid' ? 'unpaid' : 'paid',
+                  )
+                }
+                title="Click to toggle Payment Status"
+                className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider transition-all flex items-center gap-1 ${
+                  order.payment_status === 'paid'
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30'
+                    : 'bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30'
+                }`}
+              >
+                {order.payment_status === 'paid' ? 'Paid' : 'Unpaid'}
+              </button>
               <span
                 className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider ${
                   (order.order_type || 'Dine In') === 'Take Away'

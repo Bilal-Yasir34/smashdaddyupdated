@@ -7,6 +7,17 @@
   to { opacity: 1; }
 }
 
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @keyframes scaleIn {
   from {
     opacity: 0;
@@ -18,6 +29,217 @@
   }
 }
 
+@keyframes pulseGlow {
+  0%, 100% {
+    box-shadow: 0 0 15px rgba(250, 204, 21, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 25px rgba(250, 204, 21, 0.4);
+  }
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(161, 161, 170, 0.3);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(161, 161, 170, 0.5);
+}
+
+/* Base Body Styles */
+body {
+  transition: background-color 0.25s ease, color 0.25s ease;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+}
+
+/* Custom Utility Classes */
+.glass-card {
+  background: rgba(24, 24, 27, 0.7);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+html.light .glass-card {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(203, 213, 225, 0.8);
+  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.05);
+}
+
+/* ================= LIGHT MODE OVERRIDES ================= */
+html.light body,
+html.light #root {
+  background-color: #f8fafc;
+  color: #0f172a;
+}
+
+/* Main background containers */
+html.light .bg-zinc-950,
+html.light .bg-black {
+  background-color: #ffffff;
+  color: #0f172a;
+}
+
+html.light .bg-zinc-900 {
+  background-color: #f1f5f9;
+  color: #0f172a;
+}
+
+html.light .bg-zinc-800 {
+  background-color: #e2e8f0;
+  color: #0f172a;
+}
+
+html.light .bg-zinc-700 {
+  background-color: #cbd5e1;
+  color: #0f172a;
+}
+
+html.light .bg-zinc-900\/50,
+html.light .bg-zinc-900\/60,
+html.light .bg-zinc-900\/80,
+html.light .bg-zinc-900\/90 {
+  background-color: rgba(241, 245, 249, 0.9);
+  color: #0f172a;
+}
+
+html.light .bg-zinc-800\/50,
+html.light .bg-zinc-800\/60,
+html.light .bg-zinc-800\/80,
+html.light .bg-zinc-800\/90 {
+  background-color: rgba(226, 232, 240, 0.9);
+  color: #0f172a;
+}
+
+html.light .bg-zinc-950\/50,
+html.light .bg-zinc-950\/80,
+html.light .bg-zinc-950\/90 {
+  background-color: rgba(255, 255, 255, 0.95);
+  color: #0f172a;
+}
+
+/* Borders */
+html.light .border-zinc-800,
+html.light .border-zinc-800\/80,
+html.light .border-zinc-800\/60,
+html.light .border-zinc-800\/50,
+html.light .border-zinc-700 {
+  border-color: #cbd5e1;
+}
+
+/* Text Colors */
+html.light .text-white {
+  color: #0f172a;
+}
+
+html.light .text-zinc-200,
+html.light .text-zinc-300 {
+  color: #1e293b;
+}
+
+html.light .text-zinc-400,
+html.light .text-zinc-500 {
+  color: #475569;
+}
+
+html.light .text-zinc-600 {
+  color: #334155;
+}
+
+/* Hover text states in light mode */
+html.light .hover\:text-white:hover {
+  color: #000000 !important;
+}
+
+/* Force crisp high-contrast text inside colored badges and action buttons */
+html.light .bg-red-500,
+html.light .bg-red-600,
+html.light .bg-red-500 *,
+html.light .bg-red-600 * {
+  color: #ffffff !important;
+}
+
+html.light .bg-emerald-500,
+html.light .bg-emerald-600,
+html.light .bg-green-500,
+html.light .bg-green-600,
+html.light .bg-emerald-500 *,
+html.light .bg-emerald-600 *,
+html.light .bg-green-500 *,
+html.light .bg-green-600 * {
+  color: #ffffff !important;
+}
+
+html.light .bg-blue-500,
+html.light .bg-blue-600,
+html.light .bg-indigo-600,
+html.light .bg-blue-500 *,
+html.light .bg-blue-600 *,
+html.light .bg-indigo-600 * {
+  color: #ffffff !important;
+}
+
+html.light .bg-yellow-400,
+html.light .bg-yellow-300,
+html.light .bg-yellow-400 *,
+html.light .bg-yellow-300 * {
+  color: #000000 !important;
+}
+
+/* Inputs, Textareas, Selects */
+html.light input:not([type="checkbox"]):not([type="radio"]),
+html.light textarea,
+html.light select {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #cbd5e1 !important;
+}
+
+html.light input::placeholder,
+html.light textarea::placeholder {
+  color: #94a3b8 !important;
+}
+
+/* Modals */
+html.light [role="dialog"],
+html.light .modal-container {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #e2e8f0 !important;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+}
+
+/* Header & Tab Buttons */
+html.light header {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+
+html.light button.bg-zinc-900,
+html.light button.bg-zinc-800 {
+  background-color: #f1f5f9;
+  color: #0f172a;
+  border-color: #cbd5e1;
+}
+
+html.light button.bg-zinc-900:hover,
+html.light button.bg-zinc-800:hover {
+  background-color: #e2e8f0;
+  color: #000000;
+}
+
+/* Print thermal receipt rules */
 @media print {
   @page {
     margin: 0;

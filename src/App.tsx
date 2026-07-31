@@ -8,6 +8,7 @@ import Analytics from './pages/Analytics';
 import Expenses from './pages/Expenses';
 import OrderModule from './pages/OrderModule';
 import { isAdminLoggedIn, logoutAdmin } from './lib/auth';
+import { ThemeProvider } from './context/ThemeContext';
 import type { AdminTab } from './types';
 
 type View = 'landing' | 'admin-login' | 'admin' | 'order';
@@ -37,46 +38,38 @@ export default function App() {
     setView('landing');
   }
 
-  if (view === 'landing') {
-    return <Landing onAdmin={goAdmin} onOrder={() => setView('order')} />;
-  }
-
-  if (view === 'admin-login') {
-    return <AdminLogin onSuccess={handleLoginSuccess} onBack={() => setView('landing')} />;
-  }
-
-  if (view === 'order') {
-    return <OrderModule onBack={() => setView('landing')} />;
-  }
-
-  if (view === 'admin') {
-    if (adminTab === 'menu') {
-      return (
-        <MenuManagement onLogout={handleLogout} onNavigate={setAdminTab} activeTab={adminTab} />
-      );
-    }
-    if (adminTab === 'inventory') {
-      return (
-        <InventoryManagement
-          onLogout={handleLogout}
-          onNavigate={setAdminTab}
-          activeTab={adminTab}
-        />
-      );
-    }
-    if (adminTab === 'staff') {
-      return (
-        <StaffManagement onLogout={handleLogout} onNavigate={setAdminTab} activeTab={adminTab} />
-      );
-    }
-    if (adminTab === 'expenses') {
-      return (
-        <Expenses onLogout={handleLogout} onNavigate={setAdminTab} activeTab={adminTab} />
-      );
-    }
-    return <Analytics onLogout={handleLogout} onNavigate={setAdminTab} activeTab={adminTab} />;
-  }
-
-  return null;
+  return (
+    <ThemeProvider>
+      {view === 'landing' && <Landing onAdmin={goAdmin} onOrder={() => setView('order')} />}
+      {view === 'admin-login' && (
+        <AdminLogin onSuccess={handleLoginSuccess} onBack={() => setView('landing')} />
+      )}
+      {view === 'order' && <OrderModule onBack={() => setView('landing')} />}
+      {view === 'admin' && (
+        <>
+          {adminTab === 'menu' && (
+            <MenuManagement onLogout={handleLogout} onNavigate={setAdminTab} activeTab={adminTab} />
+          )}
+          {adminTab === 'inventory' && (
+            <InventoryManagement
+              onLogout={handleLogout}
+              onNavigate={setAdminTab}
+              activeTab={adminTab}
+            />
+          )}
+          {adminTab === 'staff' && (
+            <StaffManagement onLogout={handleLogout} onNavigate={setAdminTab} activeTab={adminTab} />
+          )}
+          {adminTab === 'expenses' && (
+            <Expenses onLogout={handleLogout} onNavigate={setAdminTab} activeTab={adminTab} />
+          )}
+          {adminTab === 'analytics' && (
+            <Analytics onLogout={handleLogout} onNavigate={setAdminTab} activeTab={adminTab} />
+          )}
+        </>
+      )}
+    </ThemeProvider>
+  );
 }
+
 

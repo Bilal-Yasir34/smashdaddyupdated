@@ -27,6 +27,7 @@ export interface Order {
   discount_amount?: number;
   total_amount: number;
   payment_method: 'cash' | 'card';
+  payment_status?: 'paid' | 'unpaid';
   status: OrderStatus;
   instructions?: string | null;
   customer_name?: string | null;

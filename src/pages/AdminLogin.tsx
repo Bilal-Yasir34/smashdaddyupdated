@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Lock, ArrowRight, Eye, EyeOff } from 'lucide-react';
 import Logo from '../components/Logo';
 import { loginAdmin } from '../lib/auth';
+import ThemeToggle from '../components/ThemeToggle';
 
 interface AdminLoginProps {
   onSuccess: () => void;
@@ -29,7 +30,11 @@ export default function AdminLogin({ onSuccess, onBack }: AdminLoginProps) {
   }
 
   return (
-    <div className="min-h-screen bg-zinc-950 flex items-center justify-center p-4 relative overflow-hidden">
+    <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center p-4 relative overflow-hidden">
+      {/* Top right theme toggle */}
+      <div className="absolute top-4 right-4 z-10">
+        <ThemeToggle />
+      </div>
       {/* glow background */}
       <div className="absolute -top-40 -left-40 w-96 h-96 bg-yellow-400/10 rounded-full blur-3xl" />
       <div className="absolute -bottom-40 -right-40 w-96 h-96 bg-yellow-400/10 rounded-full blur-3xl" />

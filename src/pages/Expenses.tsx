@@ -2,20 +2,25 @@ import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import type { Expense, Order, AdminTab } from '../types';
 import { formatPKR, formatDateTime } from '../lib/format';
+import ThemeToggle from '../components/ThemeToggle';
 import {
   Wallet,
   Plus,
+  Pencil as Edit3,
   Trash2,
-  Edit3,
-  Calendar,
   Search,
-  TrendingDown,
-  TrendingUp,
-  Receipt,
+  Calendar,
   Tag,
   DollarSign,
+  TrendingUp,
+  TrendingDown,
+  Receipt,
   PieChart as PieChartIcon,
   AlertTriangle,
+  Utensils,
+  Package,
+  Users,
+  BarChart3,
 } from 'lucide-react';
 import Modal from '../components/Modal';
 
@@ -261,32 +266,36 @@ export default function Expenses({ onLogout, onNavigate, activeTab }: ExpensesPr
             </span>
             <span className="text-xs text-zinc-500 hidden sm:inline">Admin</span>
           </div>
-          <button
-            onClick={onLogout}
-            className="text-sm text-zinc-400 hover:text-red-400 transition-colors"
-          >
-            Logout
-          </button>
+          <div className="flex items-center gap-3">
+            <ThemeToggle />
+            <button
+              onClick={onLogout}
+              className="text-sm text-zinc-400 hover:text-red-400 transition-colors font-medium"
+            >
+              Logout
+            </button>
+          </div>
         </div>
         <div className="max-w-6xl mx-auto px-4 flex gap-1 overflow-x-auto scrollbar-none">
           {(
             [
-              { key: 'menu', label: 'Menu Management' },
-              { key: 'inventory', label: 'Inventory' },
-              { key: 'staff', label: 'Staff' },
-              { key: 'analytics', label: 'Analytics' },
-              { key: 'expenses', label: 'Expenses' },
+              { key: 'menu', label: 'Menu Management', icon: Utensils },
+              { key: 'inventory', label: 'Inventory', icon: Package },
+              { key: 'staff', label: 'Staff', icon: Users },
+              { key: 'analytics', label: 'Analytics', icon: BarChart3 },
+              { key: 'expenses', label: 'Expenses', icon: Wallet },
             ] as const
           ).map((tab) => (
             <button
               key={tab.key}
               onClick={() => onNavigate(tab.key)}
-              className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-all whitespace-nowrap ${
+              className={`px-4 py-2.5 text-sm font-bold border-b-2 transition-all flex items-center gap-2 whitespace-nowrap ${
                 activeTab === tab.key
                   ? 'border-yellow-400 text-yellow-400'
                   : 'border-transparent text-zinc-500 hover:text-zinc-300'
               }`}
             >
+              <tab.icon size={15} />
               {tab.label}
             </button>
           ))}
