@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import type { MenuItem, CartLine, Order, OrderItem, OrderStatus, OrderType } from '../types';
 import { formatPKR, formatDateTime } from '../lib/format';
@@ -88,9 +88,10 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
   const [discountType, setDiscountType] = useState<'percent' | 'amount'>('percent');
   const [discountValue, setDiscountValue] = useState<number>(3);
   const [userHasOverriddenDiscount, setUserHasOverriddenDiscount] = useState<boolean>(false);
-  const [paymentStatus, setPaymentStatus] = useState<'paid' | 'unpaid'>('paid');
+  const [paymentStatus, setPaymentStatus] = useState<'paid' | 'unpaid'>('unpaid');
   const [orderInstructions, setOrderInstructions] = useState<string>('');
   const [customerName, setCustomerName] = useState<string>('');
+  const [tableNumber, setTableNumber] = useState<string>('');
   const [orderType, setOrderType] = useState<OrderType>('Dine In');
   const [checkoutStep, setCheckoutStep] = useState<CheckoutStep>('cart');
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | null>(null);
@@ -106,6 +107,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
     lines: CartLine[];
     instructions?: string | null;
     customerName?: string | null;
+    tableNumber?: string | null;
     orderType: OrderType;
     timestamp: string;
   } | null>(null);
@@ -114,6 +116,8 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
   const [kdsOrders, setKdsOrders] = useState<KDSOrder[]>([]);
   const [kdsLoading, setKdsLoading] = useState(false);
   const [kdsFilter, setKdsFilter] = useState<OrderStatus | 'All'>('Being Prepared');
+  const [kdsSearch, setKdsSearch] = useState<string>('');
+  const [showFloorMapInHeader, setShowFloorMapInHeader] = useState<boolean>(false);
   const [nowMs, setNowMs] = useState<number>(Date.now());
 
   // KDS Edit Order State
@@ -122,11 +126,12 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
     Array<{ id?: string; menu_item_id: string | null; item_name: string; item_price: number; quantity: number }>
   >([]);
   const [editCustomerName, setEditCustomerName] = useState<string>('');
+  const [editTableNumber, setEditTableNumber] = useState<string>('');
   const [editOrderType, setEditOrderType] = useState<OrderType>('Dine In');
   const [editInstructions, setEditInstructions] = useState<string>('');
   const [editDiscountType, setEditDiscountType] = useState<'percent' | 'amount'>('percent');
   const [editDiscountValue, setEditDiscountValue] = useState<number>(0);
-  const [editPaymentStatus, setEditPaymentStatus] = useState<'paid' | 'unpaid'>('paid');
+  const [editPaymentStatus, setEditPaymentStatus] = useState<'paid' | 'unpaid'>('unpaid');
   const [editPaymentMethod, setEditPaymentMethod] = useState<'cash' | 'card'>('cash');
   const [editSaving, setEditSaving] = useState<boolean>(false);
   const [selectedAddItem, setSelectedAddItem] = useState<string>('');
@@ -134,6 +139,22 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
   // Delete Order State
   const [deletingOrder, setDeletingOrder] = useState<KDSOrder | null>(null);
   const [deleting, setDeleting] = useState<boolean>(false);
+
+  // Ref for auto-closing header Tables Map on click-outside
+  const floorMapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showFloorMapInHeader) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (floorMapRef.current && !floorMapRef.current.contains(event.target as Node)) {
+        setShowFloorMapInHeader(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showFloorMapInHeader]);
 
   // Ticker for KDS 25-minute countdown (updates every 1 second)
   useEffect(() => {
@@ -307,16 +328,28 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
       status: 'Being Prepared',
       instructions: orderInstructions.trim() || null,
       customer_name: customerName.trim() || null,
+      table_number: tableNumber.trim() || null,
       order_type: orderType,
       order_number: nextOrderNumber,
     };
 
     let orderRes = await supabase.from('orders').insert(fullPayload).select().single();
 
+    // Fallback 0: Try without table_number if DB schema lacks 'table_number' column
+    if (orderRes.error) {
+      console.warn('Full payload insert failed, trying without table_number:', orderRes.error);
+      const { table_number, ...payloadWithoutTableNumber } = fullPayload;
+      orderRes = await supabase
+        .from('orders')
+        .insert(payloadWithoutTableNumber)
+        .select()
+        .single();
+    }
+
     // Fallback 1: Try without payment_status if DB schema lacks 'payment_status' column
     if (orderRes.error) {
       console.warn('Full payload insert failed, trying without payment_status:', orderRes.error);
-      const { payment_status, ...payloadWithoutPaymentStatus } = fullPayload;
+      const { payment_status, table_number, ...payloadWithoutPaymentStatus } = fullPayload;
       orderRes = await supabase
         .from('orders')
         .insert(payloadWithoutPaymentStatus)
@@ -327,7 +360,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
     // Fallback 1: Try without order_number if DB schema lacks 'order_number' column
     if (orderRes.error) {
       console.warn('Full payload insert failed, trying without order_number:', orderRes.error);
-      const { order_number, ...payloadWithoutOrderNumber } = fullPayload;
+      const { order_number, table_number, ...payloadWithoutOrderNumber } = fullPayload;
       orderRes = await supabase
         .from('orders')
         .insert(payloadWithoutOrderNumber)
@@ -338,7 +371,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
     // Fallback 2: Try without order_type if DB schema lacks 'order_type' column
     if (orderRes.error) {
       console.warn('Insert failed, trying without order_type:', orderRes.error);
-      const { order_type, order_number, ...payloadWithoutOrderType } = fullPayload;
+      const { order_type, order_number, table_number, ...payloadWithoutOrderType } = fullPayload;
       orderRes = await supabase
         .from('orders')
         .insert(payloadWithoutOrderType)
@@ -349,7 +382,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
     // Fallback 3: Try without customer_name if DB schema lacks 'customer_name' column
     if (orderRes.error) {
       console.warn('Insert failed, trying without customer_name:', orderRes.error);
-      const { customer_name, order_type, order_number, ...payloadWithoutCustomerName } = fullPayload;
+      const { customer_name, order_type, order_number, table_number, ...payloadWithoutCustomerName } = fullPayload;
       orderRes = await supabase
         .from('orders')
         .insert(payloadWithoutCustomerName)
@@ -413,6 +446,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
       lines: cart,
       instructions: orderInstructions.trim() || null,
       customerName: customerName.trim() || null,
+      tableNumber: tableNumber.trim() || null,
       orderType: orderType,
       timestamp: order.created_at || new Date().toISOString(),
     });
@@ -425,9 +459,10 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
     setDiscountType('percent');
     setDiscountValue(3);
     setUserHasOverriddenDiscount(false);
-    setPaymentStatus('paid');
+    setPaymentStatus('unpaid');
     setOrderInstructions('');
     setCustomerName('');
+    setTableNumber('');
     setOrderType('Dine In');
     setReceipt(null);
     setPaymentMethod(null);
@@ -530,12 +565,25 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
     const existingOrder = kdsOrders.find((o) => o.id === orderId);
     const previousStatus = existingOrder?.status || 'Being Prepared';
 
+    const updates: { status: OrderStatus; payment_status?: 'paid' | 'unpaid' } = { status: newStatus };
+    if (newStatus === 'Served') {
+      updates.payment_status = 'paid';
+    }
+
     setKdsOrders((prev) =>
-      prev.map((o) => (o.id === orderId ? { ...o, status: newStatus } : o)),
+      prev.map((o) =>
+        o.id === orderId
+          ? {
+              ...o,
+              status: newStatus,
+              ...(newStatus === 'Served' ? { payment_status: 'paid' } : {}),
+            }
+          : o,
+      ),
     );
     const { error } = await supabase
       .from('orders')
-      .update({ status: newStatus })
+      .update(updates)
       .eq('id', orderId);
 
     if (error) {
@@ -567,11 +615,12 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
   function openEditOrder(order: KDSOrder) {
     setEditingOrder(order);
     setEditCustomerName(order.customer_name || '');
+    setEditTableNumber(order.table_number || '');
     setEditOrderType(order.order_type || 'Dine In');
     setEditInstructions(order.instructions || '');
     setEditDiscountType('percent');
     setEditDiscountValue(order.discount_percent || 0);
-    setEditPaymentStatus(order.payment_status || 'paid');
+    setEditPaymentStatus(order.payment_status || 'unpaid');
     setEditPaymentMethod(order.payment_method || 'cash');
     setSelectedAddItem('');
     setEditItems(
@@ -611,6 +660,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
       payment_method: editPaymentMethod,
       payment_status: editPaymentStatus,
       customer_name: editCustomerName.trim() || null,
+      table_number: editTableNumber.trim() || null,
       order_type: editOrderType,
       instructions: editInstructions.trim() || null,
     };
@@ -622,7 +672,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
 
     if (ordErr) {
       console.warn('Update full order failed, trying without extra fields:', ordErr);
-      const { payment_status, order_type, customer_name, instructions, ...basicPayload } = updatePayload;
+      const { payment_status, order_type, customer_name, table_number, instructions, ...basicPayload } = updatePayload;
       await supabase.from('orders').update(basicPayload).eq('id', editingOrder.id);
     }
 
@@ -754,7 +804,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
   return (
     <div className="min-h-screen bg-zinc-950 text-white pb-24">
       {/* Top Header */}
-      <header className="sticky top-0 z-30 bg-zinc-900/90 backdrop-blur border-b border-zinc-800">
+      <header ref={floorMapRef} className="sticky top-0 z-30 bg-zinc-900/90 backdrop-blur border-b border-zinc-800">
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button
@@ -773,30 +823,51 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
           <div className="flex items-center gap-3">
             <ThemeToggle />
 
-            {/* Section Switcher Tabs */}
-            <div className="flex bg-zinc-950 p-1 rounded-xl border border-zinc-800">
+            {/* Section Switcher Tabs & Live Tables Map Button */}
+            <div className="flex items-center gap-2">
+              <div className="flex bg-zinc-950 p-1 rounded-xl border border-zinc-800">
+                <button
+                  onClick={() => setActiveSection('menu')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${activeSection === 'menu'
+                    ? 'bg-yellow-400 text-black shadow-sm'
+                    : 'text-zinc-400 hover:text-white'
+                    }`}
+                >
+                  <Utensils size={14} /> Menu
+                </button>
+                <button
+                  onClick={() => setActiveSection('kds')}
+                  className={`relative flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${activeSection === 'kds'
+                    ? 'bg-yellow-400 text-black shadow-sm'
+                    : 'text-zinc-400 hover:text-white'
+                    }`}
+                >
+                  <ChefHat size={14} /> KDS
+                  {preparingCount > 0 && (
+                    <span className="ml-1 bg-red-500 text-white text-[10px] px-1.5 py-0.2 rounded-full animate-pulse">
+                      {preparingCount}
+                    </span>
+                  )}
+                </button>
+              </div>
+
               <button
-                onClick={() => setActiveSection('menu')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${activeSection === 'menu'
-                  ? 'bg-yellow-400 text-black shadow-sm'
-                  : 'text-zinc-400 hover:text-white'
-                  }`}
+                type="button"
+                onClick={() => setShowFloorMapInHeader((prev) => !prev)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all border ${
+                  showFloorMapInHeader
+                    ? 'bg-yellow-400 text-black border-yellow-400 shadow-sm'
+                    : 'bg-zinc-950 border-zinc-800 text-zinc-300 hover:border-zinc-700 hover:text-white'
+                }`}
+                title="Toggle Live Table Floor Map"
               >
-                <Utensils size={14} /> Menu
-              </button>
-              <button
-                onClick={() => setActiveSection('kds')}
-                className={`relative flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${activeSection === 'kds'
-                  ? 'bg-yellow-400 text-black shadow-sm'
-                  : 'text-zinc-400 hover:text-white'
-                  }`}
-              >
-                <ChefHat size={14} /> KDS
-                {preparingCount > 0 && (
-                  <span className="ml-1 bg-red-500 text-white text-[10px] px-1.5 py-0.2 rounded-full animate-pulse">
-                    {preparingCount}
-                  </span>
-                )}
+                <Utensils size={14} className={showFloorMapInHeader ? 'text-black' : 'text-yellow-400'} />
+                <span className="hidden sm:inline">Tables Map</span>
+                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-extrabold ${
+                  showFloorMapInHeader ? 'bg-black/20 text-black' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                }`}>
+                  {10 - kdsOrders.filter((o) => (o.status || 'Being Prepared') === 'Being Prepared' && o.table_number).length} Free
+                </span>
               </button>
             </div>
 
@@ -817,6 +888,24 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
             )}
           </div>
         </div>
+
+        {/* Live Table Floor Map Collapsible Banner */}
+        {showFloorMapInHeader && (
+          <div className="max-w-6xl mx-auto px-4 pb-3 animate-[slideDown_0.2s_ease-out]">
+            <TableFloorGraphic
+              orders={kdsOrders}
+              selectedTable={tableNumber}
+              onSelectTable={(tName) => {
+                setTableNumber(tName);
+                if (activeSection === 'kds') {
+                  setKdsSearch(tName);
+                } else if (cart.length > 0) {
+                  setCartOpen(true);
+                }
+              }}
+            />
+          </div>
+        )}
 
         {/* Search Bar (Only visible in Menu tab) */}
         {activeSection === 'menu' && (
@@ -904,8 +993,8 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
         ) : (
           /* ================= KITCHEN DISPLAY SYSTEM (KDS) SECTION ================= */
           <div className="space-y-6">
-            {/* KDS Header & Status Filter Bar */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-zinc-900/50 border border-zinc-800/80 rounded-2xl p-4">
+            {/* KDS Header & Search & Status Filter Bar */}
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-zinc-900/50 border border-zinc-800/80 rounded-2xl p-4">
               <div>
                 <h1 className="text-xl font-bold flex items-center gap-2">
                   <ChefHat className="text-yellow-400" size={24} /> Kitchen Display System (KDS)
@@ -915,42 +1004,65 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                 </p>
               </div>
 
-              <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0">
-                <button
-                  onClick={loadKdsOrders}
-                  disabled={kdsLoading}
-                  className="p-2 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 rounded-xl transition-all"
-                  title="Refresh Queue"
-                >
-                  <RefreshCw size={16} className={kdsLoading ? 'animate-spin' : ''} />
-                </button>
-                {(['Being Prepared', 'Served', 'Cancelled', 'All'] as const).map((st) => {
-                  const count =
-                    st === 'All'
-                      ? kdsOrders.length
-                      : kdsOrders.filter((o) => (o.status || 'Being Prepared') === st).length;
-                  return (
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                {/* Search Bar for Table Number or Customer Name */}
+                <div className="relative flex-1 min-w-[210px]">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" size={15} />
+                  <input
+                    type="text"
+                    value={kdsSearch}
+                    onChange={(e) => setKdsSearch(e.target.value)}
+                    placeholder="Search by table # or customer..."
+                    className="w-full bg-zinc-900 border border-zinc-800 focus:border-yellow-400 text-xs text-white placeholder-zinc-500 rounded-xl pl-9 pr-8 py-2 outline-none transition-colors"
+                  />
+                  {kdsSearch && (
                     <button
-                      key={st}
-                      onClick={() => setKdsFilter(st)}
-                      className={`px-3 py-1.5 text-xs rounded-xl font-bold transition-all whitespace-nowrap flex items-center gap-1.5 ${kdsFilter === st
-                        ? 'bg-yellow-400 text-black shadow-md shadow-yellow-400/10'
-                        : 'bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white'
-                        }`}
+                      type="button"
+                      onClick={() => setKdsSearch('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-white"
                     >
-                      <span>{st}</span>
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
-                          kdsFilter === st
-                            ? 'bg-black/20 text-black'
-                            : 'bg-zinc-200 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-300'
-                        }`}
-                      >
-                        {count}
-                      </span>
+                      <X size={14} />
                     </button>
-                  );
-                })}
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0 shrink-0">
+                  <button
+                    onClick={loadKdsOrders}
+                    disabled={kdsLoading}
+                    className="p-2 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 rounded-xl transition-all shrink-0"
+                    title="Refresh Queue"
+                  >
+                    <RefreshCw size={16} className={kdsLoading ? 'animate-spin' : ''} />
+                  </button>
+                  {(['Being Prepared', 'Served', 'Cancelled', 'All'] as const).map((st) => {
+                    const count =
+                      st === 'All'
+                        ? kdsOrders.length
+                        : kdsOrders.filter((o) => (o.status || 'Being Prepared') === st).length;
+                    return (
+                      <button
+                        key={st}
+                        onClick={() => setKdsFilter(st)}
+                        className={`px-3 py-1.5 text-xs rounded-xl font-bold transition-all whitespace-nowrap flex items-center gap-1.5 ${kdsFilter === st
+                          ? 'bg-yellow-400 text-black shadow-md shadow-yellow-400/10'
+                          : 'bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white'
+                          }`}
+                      >
+                        <span>{st}</span>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                            kdsFilter === st
+                              ? 'bg-black/20 text-black'
+                              : 'bg-zinc-200 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-300'
+                          }`}
+                        >
+                          {count}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 
@@ -961,9 +1073,16 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
               </div>
             ) : (
               <KDSOrdersGrid
-                orders={kdsOrders.filter((o) =>
-                  kdsFilter === 'All' ? true : (o.status || 'Being Prepared') === kdsFilter,
-                )}
+                orders={kdsOrders.filter((o) => {
+                  const matchesStatus =
+                    kdsFilter === 'All' ? true : (o.status || 'Being Prepared') === kdsFilter;
+                  const term = kdsSearch.trim().toLowerCase();
+                  if (!term) return matchesStatus;
+                  const matchesCustomer = o.customer_name ? o.customer_name.toLowerCase().includes(term) : false;
+                  const matchesTable = o.table_number ? o.table_number.toLowerCase().includes(term) : false;
+                  const matchesOrderNo = o.order_number ? o.order_number.toLowerCase().includes(term) : false;
+                  return matchesStatus && (matchesCustomer || matchesTable || matchesOrderNo);
+                })}
                 nowMs={nowMs}
                 onUpdateStatus={updateOrderStatus}
                 onUpdatePaymentStatus={updateOrderPaymentStatus}
@@ -991,179 +1110,220 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
             ? 'Receipt'
             : checkoutStep === 'payment'
               ? 'Payment Method'
-              : 'Your Order'
+              : 'Your Order & Checkout'
         }
-        maxWidth="max-w-lg"
+        maxWidth="max-w-3xl"
       >
         {checkoutStep === 'cart' && (
-          <div className="space-y-3.5">
+          <div className="space-y-4">
             {cart.length === 0 ? (
-              <div className="text-center py-10 space-y-2">
-                <ShoppingCart className="mx-auto text-zinc-600" size={36} />
-                <p className="text-zinc-400 text-sm font-medium">Your cart is empty.</p>
-                <p className="text-zinc-600 text-xs">Add items from the menu to build an order.</p>
+              <div className="text-center py-12 space-y-3">
+                <ShoppingCart className="mx-auto text-zinc-600" size={44} />
+                <p className="text-zinc-300 text-base font-semibold">Your cart is empty.</p>
+                <p className="text-zinc-500 text-xs max-w-xs mx-auto">
+                  Select delicious burgers, sides, or drinks from the menu to build an order.
+                </p>
               </div>
             ) : (
-              <>
-                {/* 1. Cart Items List */}
-                <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-2.5 space-y-2">
-                  <div className="flex items-center justify-between px-1 pb-1 border-b border-zinc-800/60">
-                    <span className="text-xs font-bold text-zinc-400 uppercase tracking-wider">
-                      Cart Items ({cartCount})
-                    </span>
-                    <button
-                      type="button"
-                      onClick={resetOrder}
-                      className="text-[11px] text-zinc-500 hover:text-red-400 font-medium transition-colors"
-                    >
-                      Clear All
-                    </button>
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-start">
+                {/* LEFT COLUMN: Cart Items & Subtotal */}
+                <div className="md:col-span-5 space-y-3">
+                  <div className="bg-zinc-950 border border-zinc-800/80 rounded-2xl p-3 space-y-3">
+                    <div className="flex items-center justify-between pb-2 border-b border-zinc-800/80">
+                      <span className="text-xs font-extrabold text-yellow-400 uppercase tracking-wider flex items-center gap-1.5">
+                        <ShoppingCart size={14} /> Cart Items ({cartCount})
+                      </span>
+                      <button
+                        type="button"
+                        onClick={resetOrder}
+                        className="text-[11px] text-zinc-500 hover:text-red-400 font-semibold transition-colors"
+                      >
+                        Clear All
+                      </button>
+                    </div>
+
+                    <div className="space-y-2 max-h-[42vh] overflow-y-auto pr-1">
+                      {cart.map((line) => (
+                        <div
+                          key={line.item.id}
+                          className="flex items-center gap-2.5 bg-zinc-900/90 border border-zinc-800/90 rounded-xl p-2.5 transition-all hover:border-zinc-700"
+                        >
+                          <div className="flex-1 min-w-0">
+                            <p className="font-bold text-xs text-white truncate">{line.item.name}</p>
+                            <p className="text-zinc-400 text-[11px]">{formatPKR(line.item.price)} each</p>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => updateQty(line.item.id, -1)}
+                              className="w-6 h-6 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center transition-colors"
+                            >
+                              <Minus size={12} />
+                            </button>
+                            <span className="w-5 text-center font-black text-xs text-white">{line.quantity}</span>
+                            <button
+                              type="button"
+                              onClick={() => updateQty(line.item.id, 1)}
+                              className="w-6 h-6 rounded-lg bg-yellow-400 text-black hover:bg-yellow-300 flex items-center justify-center transition-colors font-bold"
+                            >
+                              <Plus size={12} />
+                            </button>
+                          </div>
+                          <span className="w-16 text-right font-black text-xs text-yellow-400">
+                            {formatPKR(Number(line.item.price) * line.quantity)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => removeLine(line.item.id)}
+                            className="text-zinc-500 hover:text-red-400 p-1 transition-colors"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   </div>
 
-                  <div className="space-y-2 max-h-[30vh] overflow-y-auto pr-1">
-                    {cart.map((line) => (
-                      <div
-                        key={line.item.id}
-                        className="flex items-center gap-3 bg-zinc-900/80 border border-zinc-800/80 rounded-xl p-2.5 transition-all"
-                      >
-                        <div className="flex-1 min-w-0">
-                          <p className="font-semibold text-xs text-white truncate">{line.item.name}</p>
-                          <p className="text-zinc-400 text-[11px]">{formatPKR(line.item.price)} each</p>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => updateQty(line.item.id, -1)}
-                            className="w-6 h-6 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center transition-colors"
-                          >
-                            <Minus size={13} />
-                          </button>
-                          <span className="w-5 text-center font-bold text-xs text-white">{line.quantity}</span>
-                          <button
-                            type="button"
-                            onClick={() => updateQty(line.item.id, 1)}
-                            className="w-6 h-6 rounded-lg bg-yellow-400 text-black hover:bg-yellow-300 flex items-center justify-center transition-colors font-bold"
-                          >
-                            <Plus size={13} />
-                          </button>
-                        </div>
-                        <span className="w-16 text-right font-bold text-xs text-yellow-400">
-                          {formatPKR(Number(line.item.price) * line.quantity)}
-                        </span>
+                  {/* Left Column Summary Card */}
+                  <div className="bg-zinc-950 border border-zinc-800/80 rounded-2xl p-3 space-y-1.5 text-xs">
+                    <div className="flex justify-between text-zinc-400">
+                      <span>Subtotal</span>
+                      <span className="font-mono">{formatPKR(subtotal)}</span>
+                    </div>
+                    {discountAmount > 0 && (
+                      <div className="flex justify-between text-green-400 font-semibold">
+                        <span>Discount ({validDiscountPercent}%)</span>
+                        <span className="font-mono">-{formatPKR(discountAmount)}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between font-black text-sm text-white pt-2 border-t border-zinc-800">
+                      <span>Total Amount</span>
+                      <span className="text-yellow-400 text-base font-mono">{formatPKR(cartTotal)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* RIGHT COLUMN: Table Floor Graphic, Order Type, Info & Discount */}
+                <div className="md:col-span-7 space-y-3">
+                  {/* Visual Table Floor Plan Selector */}
+                  <TableFloorGraphic
+                    orders={kdsOrders}
+                    selectedTable={tableNumber}
+                    onSelectTable={(tName) => setTableNumber(tName)}
+                    compact={true}
+                  />
+
+                  {/* Order Type & Payment Status Selector */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-2.5 space-y-1.5">
+                      <label className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider block">
+                        Order Type
+                      </label>
+                      <div className="grid grid-cols-2 gap-1 bg-zinc-900 p-1 rounded-lg border border-zinc-800">
                         <button
                           type="button"
-                          onClick={() => removeLine(line.item.id)}
-                          className="text-zinc-500 hover:text-red-400 p-1 transition-colors"
+                          onClick={() => setOrderType('Dine In')}
+                          className={`py-1.5 rounded text-[11px] font-bold transition-all flex items-center justify-center gap-1 ${
+                            orderType === 'Dine In'
+                              ? 'bg-yellow-400 text-black shadow-sm'
+                              : 'text-zinc-400 hover:text-white'
+                          }`}
                         >
-                          <X size={15} />
+                          <UtensilsCrossed size={12} /> Dine In
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setOrderType('Take Away')}
+                          className={`py-1.5 rounded text-[11px] font-bold transition-all flex items-center justify-center gap-1 ${
+                            orderType === 'Take Away'
+                              ? 'bg-yellow-400 text-black shadow-sm'
+                              : 'text-zinc-400 hover:text-white'
+                          }`}
+                        >
+                          <ShoppingBag size={12} /> Take Away
                         </button>
                       </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* 2. Order Configuration: Order Type & Payment Status */}
-                <div className="grid grid-cols-2 gap-2">
-                  {/* Order Type Selector */}
-                  <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-2.5 space-y-1.5">
-                    <label className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider block">
-                      Order Type
-                    </label>
-                    <div className="grid grid-cols-2 gap-1 bg-zinc-900 p-1 rounded-lg border border-zinc-800">
-                      <button
-                        type="button"
-                        onClick={() => setOrderType('Dine In')}
-                        className={`py-1.5 rounded text-[11px] font-bold transition-all flex items-center justify-center gap-1 ${
-                          orderType === 'Dine In'
-                            ? 'bg-yellow-400 text-black shadow-sm'
-                            : 'text-zinc-400 hover:text-white'
-                        }`}
-                      >
-                        <UtensilsCrossed size={12} /> Dine In
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setOrderType('Take Away')}
-                        className={`py-1.5 rounded text-[11px] font-bold transition-all flex items-center justify-center gap-1 ${
-                          orderType === 'Take Away'
-                            ? 'bg-yellow-400 text-black shadow-sm'
-                            : 'text-zinc-400 hover:text-white'
-                        }`}
-                      >
-                        <ShoppingBag size={12} /> Take Away
-                      </button>
                     </div>
-                  </div>
 
-                  {/* Payment Status Selector */}
-                  <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-2.5 space-y-1.5">
-                    <label className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider block">
-                      Payment Status
-                    </label>
-                    <div className="grid grid-cols-2 gap-1 bg-zinc-900 p-1 rounded-lg border border-zinc-800">
-                      <button
-                        type="button"
-                        onClick={() => setPaymentStatus('paid')}
-                        className={`py-1.5 rounded text-[11px] font-bold transition-all flex items-center justify-center gap-1 ${
-                          paymentStatus === 'paid'
-                            ? 'bg-emerald-500 text-black shadow-sm'
-                            : 'text-zinc-400 hover:text-white'
-                        }`}
-                      >
-                        <CheckCircle size={12} /> Paid
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setPaymentStatus('unpaid')}
-                        className={`py-1.5 rounded text-[11px] font-bold transition-all flex items-center justify-center gap-1 ${
-                          paymentStatus === 'unpaid'
-                            ? 'bg-rose-500 text-white shadow-sm'
-                            : 'text-zinc-400 hover:text-white'
-                        }`}
-                      >
-                        <XCircle size={12} /> Unpaid
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 3. Customer Info & Special Instructions */}
-                <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-2.5 space-y-2">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <div>
-                      <label className="text-[11px] font-semibold text-zinc-400 flex items-center gap-1 mb-1">
-                        <User size={12} className="text-yellow-400" /> Customer Name
+                    <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-2.5 space-y-1.5">
+                      <label className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider block">
+                        Payment Status
                       </label>
-                      <input
-                        type="text"
-                        value={customerName}
-                        onChange={(e) => setCustomerName(e.target.value)}
-                        placeholder="Name (optional)..."
-                        className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-zinc-600 focus:border-yellow-400 outline-none transition-colors"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[11px] font-semibold text-zinc-400 flex items-center gap-1 mb-1">
-                        <FileText size={12} className="text-yellow-400" /> Instructions
-                      </label>
-                      <input
-                        type="text"
-                        value={orderInstructions}
-                        onChange={(e) => setOrderInstructions(e.target.value)}
-                        placeholder="Instructions (e.g. extra spicy)..."
-                        className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-zinc-600 focus:border-yellow-400 outline-none transition-colors"
-                      />
+                      <div className="grid grid-cols-2 gap-1 bg-zinc-900 p-1 rounded-lg border border-zinc-800">
+                        <button
+                          type="button"
+                          onClick={() => setPaymentStatus('paid')}
+                          className={`py-1.5 rounded text-[11px] font-bold transition-all flex items-center justify-center gap-1 ${
+                            paymentStatus === 'paid'
+                              ? 'bg-emerald-500 text-black shadow-sm'
+                              : 'text-zinc-400 hover:text-white'
+                          }`}
+                        >
+                          <CheckCircle size={12} /> Paid
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPaymentStatus('unpaid')}
+                          className={`py-1.5 rounded text-[11px] font-bold transition-all flex items-center justify-center gap-1 ${
+                            paymentStatus === 'unpaid'
+                              ? 'bg-rose-500 text-white shadow-sm'
+                              : 'text-zinc-400 hover:text-white'
+                          }`}
+                        >
+                          <XCircle size={12} /> Unpaid
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                {/* 4. Discount Section */}
-                <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-3 space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
-                      <Percent size={14} className="text-yellow-400" /> Apply Discount
-                    </label>
-                    <div className="flex items-center gap-2">
+                  {/* Table # Input, Customer Name & Special Instructions */}
+                  <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-2.5 space-y-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      <div>
+                        <label className="text-[11px] font-semibold text-zinc-400 flex items-center gap-1 mb-1">
+                          <Utensils size={12} className="text-yellow-400" /> Selected Table
+                        </label>
+                        <input
+                          type="text"
+                          value={tableNumber}
+                          onChange={(e) => setTableNumber(e.target.value)}
+                          placeholder="e.g. Table 1..."
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-zinc-600 focus:border-yellow-400 outline-none transition-colors"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-zinc-400 flex items-center gap-1 mb-1">
+                          <User size={12} className="text-yellow-400" /> Customer Name
+                        </label>
+                        <input
+                          type="text"
+                          value={customerName}
+                          onChange={(e) => setCustomerName(e.target.value)}
+                          placeholder="Name (optional)..."
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-zinc-600 focus:border-yellow-400 outline-none transition-colors"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-zinc-400 flex items-center gap-1 mb-1">
+                          <FileText size={12} className="text-yellow-400" /> Instructions
+                        </label>
+                        <input
+                          type="text"
+                          value={orderInstructions}
+                          onChange={(e) => setOrderInstructions(e.target.value)}
+                          placeholder="Instructions..."
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-zinc-600 focus:border-yellow-400 outline-none transition-colors"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Discount Calculator */}
+                  <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-2.5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
+                        <Percent size={13} className="text-yellow-400" /> Discount
+                      </label>
                       <div className="flex items-center gap-1 bg-zinc-900 border border-zinc-800 p-0.5 rounded-lg">
                         <button
                           type="button"
@@ -1194,94 +1354,56 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                           Rs
                         </button>
                       </div>
-                      <span className="text-xs font-bold text-green-400">
-                        {discountAmount > 0 ? `-${formatPKR(discountAmount)}` : 'No Discount'}
-                      </span>
+                    </div>
+
+                    {isDrinksOnly && (
+                      <div className="text-[11px] text-amber-400/90 bg-amber-400/10 border border-amber-400/20 px-2.5 py-1 rounded-lg font-medium">
+                        🍹 Drinks only — 0% default discount applied.
+                      </div>
+                    )}
+
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {[0, 3, 5, 10, 15, 20].map((pct) => (
+                        <button
+                          key={pct}
+                          type="button"
+                          onClick={() => {
+                            setDiscountType('percent');
+                            setDiscountValue(pct);
+                            setUserHasOverriddenDiscount(true);
+                          }}
+                          className={`px-2.5 py-1 text-xs rounded-lg font-bold transition-all ${
+                            discountType === 'percent' && validDiscountPercent === pct
+                              ? 'bg-yellow-400 text-black shadow-sm'
+                              : 'bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white'
+                          }`}
+                        >
+                          {pct}%
+                        </button>
+                      ))}
                     </div>
                   </div>
 
-                  {/* Drinks-only notice */}
-                  {isDrinksOnly && (
-                    <div className="text-[11px] text-amber-400/90 bg-amber-400/10 border border-amber-400/20 px-2.5 py-1 rounded-lg">
-                      🍹 Cart contains drinks only — 0% default discount applicable.
-                    </div>
-                  )}
-
-                  {/* Presets */}
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    {[0, 3, 5, 10, 15, 20].map((pct) => (
-                      <button
-                        key={pct}
-                        type="button"
-                        onClick={() => {
-                          setDiscountType('percent');
-                          setDiscountValue(pct);
-                          setUserHasOverriddenDiscount(true);
-                        }}
-                        className={`px-2.5 py-1 text-xs rounded-lg font-bold transition-all ${
-                          discountType === 'percent' && validDiscountPercent === pct
-                            ? 'bg-yellow-400 text-black shadow-sm shadow-yellow-400/20'
-                            : 'bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white'
-                        }`}
-                      >
-                        {pct}%
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Custom Discount Input */}
-                  <div className="flex items-center gap-2 pt-1">
-                    <span className="text-xs text-zinc-500 whitespace-nowrap">
-                      Custom ({discountType === 'percent' ? '%' : 'Rs'}):
-                    </span>
-                    <div className="relative flex-1">
-                      <input
-                        type="number"
-                        min="0"
-                        value={discountValue === 0 ? '' : discountValue}
-                        onChange={(e) => {
-                          const val = parseFloat(e.target.value);
-                          setDiscountValue(isNaN(val) ? 0 : Math.max(0, val));
-                          setUserHasOverriddenDiscount(true);
-                        }}
-                        placeholder="0"
-                        className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-white placeholder-zinc-600 focus:border-yellow-400 outline-none transition-colors"
-                      />
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-zinc-500">
-                        {discountType === 'percent' ? '%' : 'PKR'}
-                      </span>
-                    </div>
+                  {/* Primary Checkout CTA */}
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setCartOpen(false)}
+                      className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-semibold py-3 px-4 rounded-xl text-xs transition-colors"
+                    >
+                      Continue Shopping
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCheckoutStep('payment')}
+                      className="flex-1 bg-yellow-400 hover:bg-yellow-300 text-black font-extrabold py-3 px-4 rounded-xl text-xs transition-all active:scale-95 shadow-md shadow-yellow-400/10 flex items-center justify-center gap-2"
+                    >
+                      <span>Proceed to Payment</span>
+                      <span className="font-mono">({formatPKR(cartTotal)})</span>
+                    </button>
                   </div>
                 </div>
-
-                {/* 5. Summary & Action Button */}
-                <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-3 space-y-2">
-                  <div className="flex justify-between text-xs text-zinc-400">
-                    <span>Original Price</span>
-                    <span>{formatPKR(subtotal)}</span>
-                  </div>
-                  {discountAmount > 0 && (
-                    <div className="flex justify-between text-xs text-green-400 font-medium">
-                      <span>
-                        Discount {discountType === 'percent' ? `(${validDiscountPercent}%)` : '(Fixed Price)'}
-                      </span>
-                      <span>-{formatPKR(discountAmount)}</span>
-                    </div>
-                  )}
-                  <div className="flex items-center justify-between border-t border-zinc-800 pt-2">
-                    <span className="font-bold text-xs text-white">Order Total</span>
-                    <span className="text-xl font-black text-yellow-400">{formatPKR(cartTotal)}</span>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setCheckoutStep('payment')}
-                  className="w-full bg-yellow-400 hover:bg-yellow-300 text-black font-bold py-3 rounded-xl transition-all active:scale-95 text-xs shadow-md shadow-yellow-400/10"
-                >
-                  Proceed to Payment
-                </button>
-              </>
+              </div>
             )}
           </div>
         )}
@@ -1510,8 +1632,20 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
       >
         {editingOrder && (
           <div className="space-y-4 max-h-[75vh] overflow-y-auto pr-1">
-            {/* Customer Name & Order Type */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {/* Table Number, Customer Name & Order Type */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1 flex items-center gap-1">
+                  <Utensils size={13} className="text-yellow-400" /> Table #
+                </label>
+                <input
+                  type="text"
+                  value={editTableNumber}
+                  onChange={(e) => setEditTableNumber(e.target.value)}
+                  placeholder="Table number..."
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white focus:border-yellow-400 outline-none"
+                />
+              </div>
               <div>
                 <label className="block text-xs font-semibold text-zinc-300 mb-1 flex items-center gap-1">
                   <User size={13} className="text-yellow-400" /> Customer Name
@@ -2049,6 +2183,24 @@ function KDSCard({
                 {order.order_type || 'Dine In'}
               </span>
             </div>
+            {/* Table Number & Status Indicator */}
+            {order.table_number && (
+              <div className="flex items-center gap-2 mt-1.5 flex-wrap text-xs">
+                <span className="font-extrabold text-white flex items-center gap-1 bg-zinc-800 px-2 py-0.5 rounded-md border border-zinc-700">
+                  <Utensils size={11} className="text-yellow-400" />
+                  {order.table_number.toLowerCase().includes('table') ? order.table_number : `Table ${order.table_number}`}
+                </span>
+                <span
+                  className={`text-[10px] font-black px-2 py-0.5 rounded-md border uppercase tracking-wider ${
+                    status === 'Served' || status === 'Cancelled'
+                      ? 'bg-emerald-950/80 text-emerald-400 border-emerald-500/40'
+                      : 'bg-amber-950/80 text-amber-400 border-amber-500/40'
+                  }`}
+                >
+                  {status === 'Served' || status === 'Cancelled' ? 'Clear / Empty' : 'Occupied'}
+                </span>
+              </div>
+            )}
             {order.customer_name && (
               <p className="text-xs font-bold text-white mt-1 flex items-center gap-1">
                 <span className="text-zinc-400 font-normal">Cust:</span>
@@ -2198,6 +2350,118 @@ function KDSCard({
             )}
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* ================= VISUAL TABLE FLOOR GRAPHIC COMPONENT ================= */
+interface TableFloorGraphicProps {
+  orders: KDSOrder[];
+  selectedTable?: string;
+  onSelectTable?: (tableNum: string) => void;
+  compact?: boolean;
+}
+
+function TableFloorGraphic({ orders, selectedTable, onSelectTable, compact = false }: TableFloorGraphicProps) {
+  const DEFAULT_TABLES = Array.from({ length: 10 }, (_, i) => `Table ${i + 1}`);
+  const activeOrders = orders.filter((o) => (o.status || 'Being Prepared') === 'Being Prepared');
+  const normalize = (val?: string | null) => (val || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  return (
+    <div className="bg-zinc-950 border border-zinc-800/80 rounded-2xl p-3 space-y-2.5">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          <Utensils className="text-yellow-400" size={15} />
+          <span className="text-[11px] font-bold text-zinc-300 uppercase tracking-wider">
+            Table Floor Map Overview
+          </span>
+        </div>
+        <div className="flex items-center gap-3 text-[10px] font-extrabold">
+          <span className="flex items-center gap-1 text-emerald-400">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-sm shadow-emerald-500/50" />
+            Free
+          </span>
+          <span className="flex items-center gap-1 text-rose-400">
+            <span className="w-2 h-2 rounded-full bg-rose-500 shadow-sm shadow-rose-500/50 animate-pulse" />
+            Reserved
+          </span>
+        </div>
+      </div>
+
+      <div className={`grid ${compact ? 'grid-cols-5 gap-1.5' : 'grid-cols-2 sm:grid-cols-5 gap-2'}`}>
+        {DEFAULT_TABLES.map((tName, idx) => {
+          const normT = normalize(tName);
+          const activeOrd = activeOrders.find(
+            (o) => normalize(o.table_number) === normT || normalize(o.table_number) === `t${idx + 1}` || normalize(o.table_number) === `${idx + 1}`
+          );
+          const isOccupied = !!activeOrd;
+          const isSelected =
+            normalize(selectedTable) === normT ||
+            normalize(selectedTable) === `t${idx + 1}` ||
+            normalize(selectedTable) === `${idx + 1}` ||
+            selectedTable === tName;
+
+          return (
+            <button
+              key={tName}
+              type="button"
+              onClick={() => onSelectTable && onSelectTable(tName)}
+              className={`relative flex flex-col items-center justify-between p-2 rounded-xl border text-left transition-all ${
+                isSelected
+                  ? 'bg-yellow-400/20 border-yellow-400 ring-2 ring-yellow-400/50 shadow-md shadow-yellow-400/20 scale-[1.02]'
+                  : isOccupied
+                  ? 'bg-rose-950/40 border-rose-500/50 hover:border-rose-400'
+                  : 'bg-emerald-950/25 border-emerald-500/30 hover:border-emerald-400 hover:bg-emerald-950/40'
+              }`}
+            >
+              <div className="w-full flex items-center justify-between gap-1">
+                <span
+                  className={`text-[11px] font-extrabold font-mono ${
+                    isSelected ? 'text-yellow-400' : isOccupied ? 'text-rose-300' : 'text-emerald-300'
+                  }`}
+                >
+                  T-{idx + 1}
+                </span>
+                <span
+                  className={`text-[9px] font-black px-1.5 py-0.2 rounded uppercase ${
+                    isOccupied
+                      ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                      : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                  }`}
+                >
+                  {isOccupied ? 'Reserved' : 'Free'}
+                </span>
+              </div>
+
+              {/* Graphic Representation of Restaurant Table */}
+              <div className="my-1 flex items-center justify-center">
+                <div
+                  className={`w-9 h-6 rounded-lg border flex items-center justify-center transition-all ${
+                    isOccupied
+                      ? 'bg-rose-900/50 border-rose-500/60 text-rose-300'
+                      : 'bg-emerald-900/40 border-emerald-500/40 text-emerald-300'
+                  }`}
+                >
+                  <Utensils size={12} className={isOccupied ? 'text-rose-400' : 'text-emerald-400'} />
+                </div>
+              </div>
+
+              {isOccupied ? (
+                <div className="w-full text-center truncate">
+                  <p className="text-[10px] font-mono font-bold text-white truncate">
+                    {activeOrd?.order_number || formatOrderDisplayNumber(activeOrd!)}
+                  </p>
+                  {activeOrd?.customer_name && (
+                    <p className="text-[9px] text-zinc-400 truncate">{activeOrd.customer_name}</p>
+                  )}
+                </div>
+              ) : (
+                <p className="text-[9px] text-emerald-400 font-semibold text-center">Available</p>
+              )}
+            </button>
+          );
+        })}
       </div>
     </div>
   );

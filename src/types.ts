@@ -31,6 +31,7 @@ export interface Order {
   status: OrderStatus;
   instructions?: string | null;
   customer_name?: string | null;
+  table_number?: string | null;
   order_type?: OrderType;
   order_number?: string | null;
   created_at: string;
