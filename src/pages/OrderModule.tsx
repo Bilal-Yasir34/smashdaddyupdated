@@ -866,7 +866,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                 <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-extrabold ${
                   showFloorMapInHeader ? 'bg-black/20 text-black' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                 }`}>
-                  {10 - kdsOrders.filter((o) => (o.status || 'Being Prepared') === 'Being Prepared' && o.table_number).length} Free
+                  {Math.max(0, 8 - kdsOrders.filter((o) => (o.status || 'Being Prepared') === 'Being Prepared' && o.table_number).length)} Free
                 </span>
               </button>
             </div>
@@ -1112,7 +1112,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
               ? 'Payment Method'
               : 'Your Order & Checkout'
         }
-        maxWidth="max-w-3xl"
+        maxWidth="max-w-4xl"
       >
         {checkoutStep === 'cart' && (
           <div className="space-y-4">
@@ -1127,7 +1127,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-start">
                 {/* LEFT COLUMN: Cart Items & Subtotal */}
-                <div className="md:col-span-5 space-y-3">
+                <div className="md:col-span-6 space-y-3">
                   <div className="bg-zinc-950 border border-zinc-800/80 rounded-2xl p-3 space-y-3">
                     <div className="flex items-center justify-between pb-2 border-b border-zinc-800/80">
                       <span className="text-xs font-extrabold text-yellow-400 uppercase tracking-wider flex items-center gap-1.5">
@@ -1149,10 +1149,10 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                           className="flex items-center gap-2.5 bg-zinc-900/90 border border-zinc-800/90 rounded-xl p-2.5 transition-all hover:border-zinc-700"
                         >
                           <div className="flex-1 min-w-0">
-                            <p className="font-bold text-xs text-white truncate">{line.item.name}</p>
+                            <p className="font-bold text-xs sm:text-sm text-white truncate" title={line.item.name}>{line.item.name}</p>
                             <p className="text-zinc-400 text-[11px]">{formatPKR(line.item.price)} each</p>
                           </div>
-                          <div className="flex items-center gap-1">
+                          <div className="flex items-center gap-1 shrink-0">
                             <button
                               type="button"
                               onClick={() => updateQty(line.item.id, -1)}
@@ -1169,13 +1169,13 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                               <Plus size={12} />
                             </button>
                           </div>
-                          <span className="w-16 text-right font-black text-xs text-yellow-400">
+                          <span className="w-16 text-right font-black text-xs text-yellow-400 shrink-0">
                             {formatPKR(Number(line.item.price) * line.quantity)}
                           </span>
                           <button
                             type="button"
                             onClick={() => removeLine(line.item.id)}
-                            className="text-zinc-500 hover:text-red-400 p-1 transition-colors"
+                            className="text-zinc-500 hover:text-red-400 p-1 transition-colors shrink-0"
                           >
                             <X size={14} />
                           </button>
@@ -1204,7 +1204,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                 </div>
 
                 {/* RIGHT COLUMN: Table Floor Graphic, Order Type, Info & Discount */}
-                <div className="md:col-span-7 space-y-3">
+                <div className="md:col-span-6 space-y-3">
                   {/* Visual Table Floor Plan Selector */}
                   <TableFloorGraphic
                     orders={kdsOrders}
@@ -1319,39 +1319,41 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                   </div>
 
                   {/* Discount Calculator */}
-                  <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-2.5 space-y-2">
+                  <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-3 space-y-2.5">
                     <div className="flex items-center justify-between">
                       <label className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
-                        <Percent size={13} className="text-yellow-400" /> Discount
+                        <Percent size={13} className="text-yellow-400" /> Discount Options
                       </label>
                       <div className="flex items-center gap-1 bg-zinc-900 border border-zinc-800 p-0.5 rounded-lg">
                         <button
                           type="button"
                           onClick={() => {
                             setDiscountType('percent');
+                            setDiscountValue(validDiscountPercent);
                             setUserHasOverriddenDiscount(true);
                           }}
-                          className={`px-2 py-0.5 text-[10px] rounded font-bold transition-all ${
+                          className={`px-2.5 py-0.5 text-[10px] rounded font-extrabold transition-all ${
                             discountType === 'percent'
-                              ? 'bg-yellow-400 text-black'
+                              ? 'bg-yellow-400 text-black shadow-sm'
                               : 'text-zinc-400 hover:text-white'
                           }`}
                         >
-                          %
+                          % (Percent)
                         </button>
                         <button
                           type="button"
                           onClick={() => {
                             setDiscountType('amount');
+                            setDiscountValue(discountAmount);
                             setUserHasOverriddenDiscount(true);
                           }}
-                          className={`px-2 py-0.5 text-[10px] rounded font-bold transition-all ${
+                          className={`px-2.5 py-0.5 text-[10px] rounded font-extrabold transition-all ${
                             discountType === 'amount'
-                              ? 'bg-yellow-400 text-black'
+                              ? 'bg-yellow-400 text-black shadow-sm'
                               : 'text-zinc-400 hover:text-white'
                           }`}
                         >
-                          Rs
+                          Rs (Fixed)
                         </button>
                       </div>
                     </div>
@@ -1362,25 +1364,73 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                       </div>
                     )}
 
+                    {/* Quick Preset Buttons */}
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      {[0, 3, 5, 10, 15, 20].map((pct) => (
-                        <button
-                          key={pct}
-                          type="button"
-                          onClick={() => {
-                            setDiscountType('percent');
-                            setDiscountValue(pct);
+                      {discountType === 'percent'
+                        ? [0, 3, 5, 10, 15, 20, 25, 50].map((pct) => (
+                            <button
+                              key={pct}
+                              type="button"
+                              onClick={() => {
+                                setDiscountType('percent');
+                                setDiscountValue(pct);
+                                setUserHasOverriddenDiscount(true);
+                              }}
+                              className={`px-2.5 py-1 text-xs rounded-lg font-bold transition-all ${
+                                discountType === 'percent' && discountValue === pct
+                                  ? 'bg-yellow-400 text-black shadow-sm'
+                                  : 'bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white'
+                              }`}
+                            >
+                              {pct}%
+                            </button>
+                          ))
+                        : [0, 50, 100, 150, 200, 300, 500].map((amt) => (
+                            <button
+                              key={amt}
+                              type="button"
+                              onClick={() => {
+                                setDiscountType('amount');
+                                setDiscountValue(amt);
+                                setUserHasOverriddenDiscount(true);
+                              }}
+                              className={`px-2.5 py-1 text-xs rounded-lg font-bold transition-all ${
+                                discountType === 'amount' && discountValue === amt
+                                  ? 'bg-yellow-400 text-black shadow-sm'
+                                  : 'bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white'
+                              }`}
+                            >
+                              Rs. {amt}
+                            </button>
+                          ))}
+                    </div>
+
+                    {/* Custom Discount Input */}
+                    <div className="pt-1 flex items-center gap-2">
+                      <div className="relative flex-1">
+                        <div className="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none text-zinc-400 text-xs font-bold">
+                          {discountType === 'percent' ? '%' : 'Rs.'}
+                        </div>
+                        <input
+                          type="number"
+                          min="0"
+                          max={discountType === 'percent' ? 100 : subtotal}
+                          step={discountType === 'percent' ? '1' : '10'}
+                          value={discountValue === 0 ? '' : discountValue}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value);
+                            setDiscountValue(isNaN(val) ? 0 : val);
                             setUserHasOverriddenDiscount(true);
                           }}
-                          className={`px-2.5 py-1 text-xs rounded-lg font-bold transition-all ${
-                            discountType === 'percent' && validDiscountPercent === pct
-                              ? 'bg-yellow-400 text-black shadow-sm'
-                              : 'bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white'
-                          }`}
-                        >
-                          {pct}%
-                        </button>
-                      ))}
+                          placeholder={discountType === 'percent' ? 'Custom % (e.g. 12)...' : 'Custom Rs (e.g. 250)...'}
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded-lg pl-9 pr-3 py-1.5 text-xs font-bold text-white placeholder-zinc-500 focus:border-yellow-400 outline-none transition-colors"
+                        />
+                      </div>
+                      {discountAmount > 0 && (
+                        <div className="text-xs font-black text-green-400 bg-green-950/40 border border-green-500/30 px-2.5 py-1.5 rounded-lg shrink-0">
+                          -{formatPKR(discountAmount)} ({validDiscountPercent}%)
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -2364,32 +2414,32 @@ interface TableFloorGraphicProps {
 }
 
 function TableFloorGraphic({ orders, selectedTable, onSelectTable, compact = false }: TableFloorGraphicProps) {
-  const DEFAULT_TABLES = Array.from({ length: 10 }, (_, i) => `Table ${i + 1}`);
+  const DEFAULT_TABLES = Array.from({ length: 8 }, (_, i) => `Table ${i + 1}`);
   const activeOrders = orders.filter((o) => (o.status || 'Being Prepared') === 'Being Prepared');
   const normalize = (val?: string | null) => (val || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
   return (
-    <div className="bg-zinc-950 border border-zinc-800/80 rounded-2xl p-3 space-y-2.5">
+    <div className={`bg-zinc-950 border border-zinc-800/80 rounded-2xl ${compact ? 'p-2 space-y-1.5' : 'p-3 space-y-2.5'}`}>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5">
-          <Utensils className="text-yellow-400" size={15} />
-          <span className="text-[11px] font-bold text-zinc-300 uppercase tracking-wider">
-            Table Floor Map Overview
+          <Utensils className="text-yellow-400" size={compact ? 13 : 15} />
+          <span className={`${compact ? 'text-[10px]' : 'text-[11px]'} font-bold text-zinc-300 uppercase tracking-wider`}>
+            Table Floor Map
           </span>
         </div>
-        <div className="flex items-center gap-3 text-[10px] font-extrabold">
+        <div className="flex items-center gap-2 text-[10px] font-extrabold">
           <span className="flex items-center gap-1 text-emerald-400">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-sm shadow-emerald-500/50" />
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-sm shadow-emerald-500/50" />
             Free
           </span>
           <span className="flex items-center gap-1 text-rose-400">
-            <span className="w-2 h-2 rounded-full bg-rose-500 shadow-sm shadow-rose-500/50 animate-pulse" />
+            <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shadow-sm shadow-rose-500/50 animate-pulse" />
             Reserved
           </span>
         </div>
       </div>
 
-      <div className={`grid ${compact ? 'grid-cols-5 gap-1.5' : 'grid-cols-2 sm:grid-cols-5 gap-2'}`}>
+      <div className={`grid ${compact ? 'grid-cols-4 gap-1.5' : 'grid-cols-2 sm:grid-cols-4 gap-2'}`}>
         {DEFAULT_TABLES.map((tName, idx) => {
           const normT = normalize(tName);
           const activeOrd = activeOrders.find(
@@ -2401,6 +2451,45 @@ function TableFloorGraphic({ orders, selectedTable, onSelectTable, compact = fal
             normalize(selectedTable) === `t${idx + 1}` ||
             normalize(selectedTable) === `${idx + 1}` ||
             selectedTable === tName;
+
+          if (compact) {
+            return (
+              <button
+                key={tName}
+                type="button"
+                onClick={() => onSelectTable && onSelectTable(tName)}
+                className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border text-center transition-all ${
+                  isSelected
+                    ? 'bg-yellow-400/20 border-yellow-400 ring-1 ring-yellow-400/50 shadow-sm scale-[1.02]'
+                    : isOccupied
+                    ? 'bg-rose-950/40 border-rose-500/40 hover:border-rose-400'
+                    : 'bg-emerald-950/25 border-emerald-500/30 hover:border-emerald-400 hover:bg-emerald-950/40'
+                }`}
+              >
+                <div className="flex items-center gap-1">
+                  <span
+                    className={`text-[10px] font-black font-mono ${
+                      isSelected ? 'text-yellow-400' : isOccupied ? 'text-rose-300' : 'text-emerald-300'
+                    }`}
+                  >
+                    T-{idx + 1}
+                  </span>
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      isOccupied ? 'bg-rose-500 animate-pulse' : 'bg-emerald-500'
+                    }`}
+                  />
+                </div>
+                {isOccupied ? (
+                  <span className="text-[8px] font-mono font-bold text-rose-300 truncate max-w-full">
+                    {activeOrd?.order_number || formatOrderDisplayNumber(activeOrd!)}
+                  </span>
+                ) : (
+                  <span className="text-[8px] text-emerald-400/70 font-medium">Free</span>
+                )}
+              </button>
+            );
+          }
 
           return (
             <button
