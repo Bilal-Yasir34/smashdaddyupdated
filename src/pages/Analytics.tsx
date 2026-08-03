@@ -51,7 +51,7 @@ export default function Analytics({ onLogout, onNavigate, activeTab }: Analytics
   const load = useCallback(async () => {
     setLoading(true);
     const { data: o } = await supabase.from('orders').select('*').order('created_at', { ascending: false });
-    const { data: oi } = await supabase.from('order_items').select('*');
+    const { data: oi } = await supabase.from('order_items').select('*').order('created_at', { ascending: false }).limit(5000);
     const { data: exp } = await supabase.from('expenses').select('*');
     setOrders((o as Order[]) ?? []);
     setOrderItems((oi as OrderItem[]) ?? []);

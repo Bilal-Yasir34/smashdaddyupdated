@@ -78,6 +78,11 @@ export function formatOrderDisplayNumber(order: { id: string; order_number?: str
   return `SD-${shortId}`;
 }
 
+export function isValidUuid(id: string | null | undefined): boolean {
+  if (!id || typeof id !== 'string') return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id.trim());
+}
+
 export default function OrderModule({ onBack }: OrderModuleProps) {
   const [activeSection, setActiveSection] = useState<PortalSection>('menu');
   const [items, setItems] = useState<MenuItem[]>([]);
@@ -179,22 +184,48 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
 
   const loadKdsOrders = useCallback(async () => {
     setKdsLoading(true);
+
+    const { data: ordersWithItems, error: joinErr } = await supabase
+      .from('orders')
+      .select('*, order_items(*)')
+      .order('created_at', { ascending: false });
+
+    if (!joinErr && ordersWithItems) {
+      const fullOrders: KDSOrder[] = (ordersWithItems as any[]).map((ord) => ({
+        ...ord,
+        status: ord.status || 'Being Prepared',
+        items: (ord.order_items || []).map((it: any) => ({
+          ...it,
+          quantity: Number(it.quantity) || 1,
+          item_price: Number(it.item_price) || 0,
+        })),
+      }));
+
+      setKdsOrders(fullOrders);
+      setKdsLoading(false);
+      return;
+    }
+
+    console.warn('Joined KDS query failed, using fallback:', joinErr);
+
     const { data: ordersData, error: ordersErr } = await supabase
       .from('orders')
       .select('*')
       .order('created_at', { ascending: false });
 
     if (ordersErr) {
-      console.error(ordersErr);
+      console.error('Failed to load orders:', ordersErr);
       setKdsLoading(false);
       return;
     }
 
     const { data: itemsData, error: itemsErr } = await supabase
       .from('order_items')
-      .select('*');
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(5000);
 
-    if (itemsErr) console.error(itemsErr);
+    if (itemsErr) console.error('Failed to load order_items:', itemsErr);
 
     const itemsMap = new Map<string, OrderItem[]>();
     ((itemsData as OrderItem[]) || []).forEach((item) => {
@@ -427,13 +458,23 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
 
     const orderItemsPayload = cart.map((l) => ({
       order_id: order.id,
-      menu_item_id: l.item.id,
+      menu_item_id: isValidUuid(l.item.id) ? l.item.id : null,
       item_name: l.item.name,
       item_price: Number(l.item.price),
       quantity: l.quantity,
     }));
-    const { error: oiError } = await supabase.from('order_items').insert(orderItemsPayload);
-    if (oiError) console.error(oiError);
+    let { error: oiError } = await supabase.from('order_items').insert(orderItemsPayload);
+    if (oiError) {
+      console.warn('Primary order_items insert failed, retrying without menu_item_id FK:', oiError);
+      const fallbackPayload = orderItemsPayload.map(({ menu_item_id, ...rest }) => ({
+        ...rest,
+        menu_item_id: null,
+      }));
+      const { error: fbErr } = await supabase.from('order_items').insert(fallbackPayload);
+      if (fbErr) console.error('Fallback order_items insert failed:', fbErr);
+    }
+
+    await loadKdsOrders();
 
     setReceipt({
       orderId: order.id,
@@ -681,12 +722,20 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
     if (editItems.length > 0) {
       const itemsPayload = editItems.map((it) => ({
         order_id: editingOrder.id,
-        menu_item_id: it.menu_item_id,
+        menu_item_id: isValidUuid(it.menu_item_id) ? it.menu_item_id : null,
         item_name: it.item_name,
         item_price: it.item_price,
         quantity: it.quantity,
       }));
-      await supabase.from('order_items').insert(itemsPayload);
+      let { error: oiError } = await supabase.from('order_items').insert(itemsPayload);
+      if (oiError) {
+        console.warn('Edit order_items insert failed, retrying without FK:', oiError);
+        const fallbackPayload = itemsPayload.map(({ menu_item_id, ...rest }) => ({
+          ...rest,
+          menu_item_id: null,
+        }));
+        await supabase.from('order_items').insert(fallbackPayload);
+      }
     }
 
     const currentEditingOrder = editingOrder;
