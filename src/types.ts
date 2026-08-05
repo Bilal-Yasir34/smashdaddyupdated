@@ -34,6 +34,7 @@ export interface Order {
   table_number?: string | null;
   order_type?: OrderType;
   order_number?: string | null;
+  delivery_fee?: number;
   created_at: string;
 }
 

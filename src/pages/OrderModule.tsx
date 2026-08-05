@@ -26,6 +26,7 @@ import {
   ShoppingBag,
   Pencil,
   Trash2,
+  Truck,
 } from 'lucide-react';
 import Logo from '../components/Logo';
 import Modal from '../components/Modal';
@@ -100,6 +101,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
   const [orderType, setOrderType] = useState<OrderType>('Dine In');
   const [checkoutStep, setCheckoutStep] = useState<CheckoutStep>('cart');
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | null>(null);
+  const [deliveryFee, setDeliveryFee] = useState<number>(0);
   const [placing, setPlacing] = useState(false);
   const [receipt, setReceipt] = useState<{
     orderId: string;
@@ -107,6 +109,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
     subtotal: number;
     discountPercent: number;
     discountAmount: number;
+    deliveryFee?: number;
     total: number;
     method: 'cash' | 'card';
     lines: CartLine[];
@@ -136,10 +139,12 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
   const [editInstructions, setEditInstructions] = useState<string>('');
   const [editDiscountType, setEditDiscountType] = useState<'percent' | 'amount'>('percent');
   const [editDiscountValue, setEditDiscountValue] = useState<number>(0);
+  const [editDeliveryFee, setEditDeliveryFee] = useState<number>(0);
   const [editPaymentStatus, setEditPaymentStatus] = useState<'paid' | 'unpaid'>('unpaid');
   const [editPaymentMethod, setEditPaymentMethod] = useState<'cash' | 'card'>('cash');
   const [editSaving, setEditSaving] = useState<boolean>(false);
-  const [selectedAddItem, setSelectedAddItem] = useState<string>('');
+  const [editSearchQuery, setEditSearchQuery] = useState<string>('');
+  const [editCategoryFilter, setEditCategoryFilter] = useState<string>('All');
 
   // Delete Order State
   const [deletingOrder, setDeletingOrder] = useState<KDSOrder | null>(null);
@@ -308,7 +313,8 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
     validDiscountPercent = subtotal > 0 ? Math.round((discountAmount / subtotal) * 100) : 0;
   }
 
-  const cartTotal = Math.max(0, subtotal - discountAmount);
+  const safeDeliveryFee = isNaN(deliveryFee) || deliveryFee < 0 ? 0 : deliveryFee;
+  const cartTotal = Math.max(0, subtotal - discountAmount) + safeDeliveryFee;
   const cartCount = cart.reduce((s, l) => s + l.quantity, 0);
 
   const filtered = items.filter(
@@ -318,6 +324,42 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
   );
 
   const categories = [...new Set(filtered.map((i) => i.category))].sort();
+
+  const editCategories = ['All', ...new Set(items.map((i) => i.category))].sort();
+
+  const filteredEditMenuItems = items.filter((item) => {
+    const matchesSearch =
+      !editSearchQuery.trim() ||
+      item.name.toLowerCase().includes(editSearchQuery.toLowerCase()) ||
+      item.category.toLowerCase().includes(editSearchQuery.toLowerCase());
+    const matchesCategory =
+      editCategoryFilter === 'All' || item.category.toLowerCase() === editCategoryFilter.toLowerCase();
+    return matchesSearch && matchesCategory;
+  });
+
+  function handleAddItemToEdit(found: MenuItem) {
+    setEditItems((prev) => {
+      const existing = prev.find(
+        (l) => l.menu_item_id === found.id || l.item_name.toLowerCase() === found.name.toLowerCase(),
+      );
+      if (existing) {
+        return prev.map((l) =>
+          l.menu_item_id === found.id || l.item_name.toLowerCase() === found.name.toLowerCase()
+            ? { ...l, quantity: l.quantity + 1 }
+            : l,
+        );
+      }
+      return [
+        ...prev,
+        {
+          menu_item_id: found.id,
+          item_name: found.name,
+          item_price: Number(found.price),
+          quantity: 1,
+        },
+      ];
+    });
+  }
 
   async function placeOrder() {
     if (!paymentMethod || cart.length === 0) return;
@@ -354,6 +396,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
       subtotal: subtotal,
       discount_percent: validDiscountPercent,
       discount_amount: discountAmount,
+      delivery_fee: safeDeliveryFee,
       payment_method: paymentMethod,
       payment_status: paymentStatus,
       status: 'Being Prepared',
@@ -365,6 +408,17 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
     };
 
     let orderRes = await supabase.from('orders').insert(fullPayload).select().single();
+
+    // Fallback -1: Try without delivery_fee if DB schema lacks 'delivery_fee' column
+    if (orderRes.error) {
+      console.warn('Full payload insert failed, trying without delivery_fee:', orderRes.error);
+      const { delivery_fee, ...payloadWithoutDeliveryFee } = fullPayload;
+      orderRes = await supabase
+        .from('orders')
+        .insert(payloadWithoutDeliveryFee)
+        .select()
+        .single();
+    }
 
     // Fallback 0: Try without table_number if DB schema lacks 'table_number' column
     if (orderRes.error) {
@@ -482,6 +536,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
       subtotal: subtotal,
       discountPercent: validDiscountPercent,
       discountAmount: discountAmount,
+      deliveryFee: safeDeliveryFee,
       total: cartTotal,
       method: paymentMethod,
       lines: cart,
@@ -500,6 +555,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
     setDiscountType('percent');
     setDiscountValue(3);
     setUserHasOverriddenDiscount(false);
+    setDeliveryFee(0);
     setPaymentStatus('unpaid');
     setOrderInstructions('');
     setCustomerName('');
@@ -661,9 +717,11 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
     setEditInstructions(order.instructions || '');
     setEditDiscountType('percent');
     setEditDiscountValue(order.discount_percent || 0);
+    setEditDeliveryFee(Number(order.delivery_fee || 0));
     setEditPaymentStatus(order.payment_status || 'unpaid');
     setEditPaymentMethod(order.payment_method || 'cash');
-    setSelectedAddItem('');
+    setEditSearchQuery('');
+    setEditCategoryFilter('All');
     setEditItems(
       order.items.map((it) => ({
         id: it.id,
@@ -691,13 +749,15 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
       editValidDiscount = editSubtotal > 0 ? Math.round((editDiscountAmount / editSubtotal) * 100) : 0;
     }
 
-    const editTotalAmount = Math.max(0, editSubtotal - editDiscountAmount);
+    const safeEditDeliveryFee = isNaN(editDeliveryFee) || editDeliveryFee < 0 ? 0 : editDeliveryFee;
+    const editTotalAmount = Math.max(0, editSubtotal - editDiscountAmount) + safeEditDeliveryFee;
 
     const updatePayload = {
       total_amount: editTotalAmount,
       subtotal: editSubtotal,
       discount_percent: editValidDiscount,
       discount_amount: editDiscountAmount,
+      delivery_fee: safeEditDeliveryFee,
       payment_method: editPaymentMethod,
       payment_status: editPaymentStatus,
       customer_name: editCustomerName.trim() || null,
@@ -763,6 +823,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
         subtotal: editSubtotal,
         discountPercent: editValidDiscount,
         discountAmount: editDiscountAmount,
+        deliveryFee: safeEditDeliveryFee,
         total: editTotalAmount,
         method: editPaymentMethod,
         lines: cartLines,
@@ -815,12 +876,15 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
       quantity: it.quantity,
     }));
 
+    const deliveryFeeVal = Number(order.delivery_fee || 0);
+
     setReceipt({
       orderId: order.id,
       orderNumber: formatOrderDisplayNumber(order),
       subtotal: displaySubtotal,
       discountPercent: displayDiscountPercent,
       discountAmount: displayDiscountAmount,
+      deliveryFee: deliveryFeeVal,
       total: Number(order.total_amount),
       method: order.payment_method || 'cash',
       lines: cartLines,
@@ -1245,6 +1309,12 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                         <span className="font-mono">-{formatPKR(discountAmount)}</span>
                       </div>
                     )}
+                    {safeDeliveryFee > 0 && (
+                      <div className="flex justify-between text-blue-400 font-semibold">
+                        <span>Delivery Fee</span>
+                        <span className="font-mono">+{formatPKR(safeDeliveryFee)}</span>
+                      </div>
+                    )}
                     <div className="flex justify-between font-black text-sm text-white pt-2 border-t border-zinc-800">
                       <span>Total Amount</span>
                       <span className="text-yellow-400 text-base font-mono">{formatPKR(cartTotal)}</span>
@@ -1483,6 +1553,68 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                     </div>
                   </div>
 
+                  {/* Delivery Fee Selector */}
+                  <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-3 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
+                        <Truck size={13} className="text-yellow-400" /> Delivery Fee
+                      </label>
+                      {safeDeliveryFee > 0 && (
+                        <span className="text-[11px] font-black text-blue-400 bg-blue-950/40 border border-blue-500/30 px-2 py-0.5 rounded">
+                          +{formatPKR(safeDeliveryFee)}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Quick Preset Buttons */}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {[0, 100, 200].map((fee) => (
+                        <button
+                          key={fee}
+                          type="button"
+                          onClick={() => setDeliveryFee(fee)}
+                          className={`px-3 py-1 text-xs rounded-lg font-bold transition-all ${
+                            deliveryFee === fee
+                              ? 'bg-yellow-400 text-black shadow-sm'
+                              : 'bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white'
+                          }`}
+                        >
+                          {fee === 0 ? 'None (Rs. 0)' : `Rs. ${fee}`}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Custom Delivery Fee Input */}
+                    <div className="pt-1 flex items-center gap-2">
+                      <div className="relative flex-1">
+                        <div className="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none text-zinc-400 text-xs font-bold">
+                          Rs.
+                        </div>
+                        <input
+                          type="number"
+                          min="0"
+                          step="10"
+                          value={deliveryFee === 0 ? '' : deliveryFee}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value);
+                            setDeliveryFee(isNaN(val) ? 0 : val);
+                          }}
+                          placeholder="Custom Delivery Fee (e.g. 150)..."
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded-lg pl-9 pr-3 py-1.5 text-xs font-bold text-white placeholder-zinc-500 focus:border-yellow-400 outline-none transition-colors"
+                        />
+                      </div>
+                      {deliveryFee > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setDeliveryFee(0)}
+                          className="text-xs text-red-400 hover:text-red-300 font-semibold px-2 py-1 bg-red-950/30 border border-red-800/40 rounded-lg shrink-0"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
                   {/* Primary Checkout CTA */}
                   <div className="flex gap-2 pt-1">
                     <button
@@ -1522,6 +1654,12 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                 <div className="flex justify-between text-sm text-green-400 font-medium">
                   <span>Discount ({validDiscountPercent}%)</span>
                   <span>-{formatPKR(discountAmount)}</span>
+                </div>
+              )}
+              {safeDeliveryFee > 0 && (
+                <div className="flex justify-between text-sm text-blue-400 font-medium">
+                  <span>Delivery Fee</span>
+                  <span>+{formatPKR(safeDeliveryFee)}</span>
                 </div>
               )}
               <div className="flex justify-between items-center border-t border-zinc-800 pt-2">
@@ -1598,7 +1736,7 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                   alt="Smash Daddy Logo"
                   className="w-16 h-16 rounded-full mx-auto mb-2 object-cover border-2 border-black p-0.5 shadow-sm"
                 />
-                <p className="font-black text-xl tracking-wider uppercase leading-none">SMASH DADDY</p>
+                <p className="font-black text-3xl tracking-wider uppercase leading-none">SMASH DADDY</p>
                 <p className="text-[11px] font-bold text-zinc-700 uppercase tracking-widest">--- PREMIUM BURGERS & Sandos ---</p>
                 <p className="text-[10px] text-zinc-600 font-sans">Official Receipt</p>
               </div>
@@ -1680,6 +1818,12 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                     <span className="font-mono">-{formatPKR(receipt.discountAmount)}</span>
                   </div>
                 )}
+                {receipt.deliveryFee && receipt.deliveryFee > 0 ? (
+                  <div className="flex justify-between py-0.5 text-zinc-800 font-bold">
+                    <span>Delivery Fee</span>
+                    <span className="font-mono">+{formatPKR(receipt.deliveryFee)}</span>
+                  </div>
+                ) : null}
                 <div className="flex justify-between items-center font-black text-sm pt-2 mt-1 border-t-2 border-black">
                   <span className="uppercase tracking-wider">ORDER TOTAL</span>
                   <span className="font-mono text-base">{formatPKR(receipt.total)}</span>
@@ -1851,50 +1995,98 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                 </div>
               )}
 
-              {/* Add Menu Item Dropdown */}
-              <div className="flex items-center gap-2 pt-1">
-                <select
-                  value={selectedAddItem}
-                  onChange={(e) => setSelectedAddItem(e.target.value)}
-                  className="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white focus:border-yellow-400 outline-none"
-                >
-                  <option value="">-- Add item from menu --</option>
-                  {items.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name} ({formatPKR(m.price)})
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!selectedAddItem) return;
-                    const found = items.find((i) => i.id === selectedAddItem);
-                    if (!found) return;
-                    setEditItems((prev) => {
-                      const existing = prev.find((l) => l.menu_item_id === found.id);
-                      if (existing) {
-                        return prev.map((l) =>
-                          l.menu_item_id === found.id ? { ...l, quantity: l.quantity + 1 } : l,
+              {/* Searchable Menu Item Picker with Instant Auto-Add */}
+              <div className="space-y-2 pt-2 border-t border-zinc-800/80">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-zinc-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <Plus size={13} className="text-yellow-400" /> Add Items to Order
+                  </label>
+                  <span className="text-[10px] text-zinc-500 font-medium">Click any item to add automatically</span>
+                </div>
+
+                {/* Search Bar & Category Chips */}
+                <div className="space-y-1.5">
+                  <div className="relative">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-yellow-400" />
+                    <input
+                      type="text"
+                      value={editSearchQuery}
+                      onChange={(e) => setEditSearchQuery(e.target.value)}
+                      placeholder="Search menu items to add instantly..."
+                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl pl-9 pr-8 py-2 text-xs text-white placeholder-zinc-500 focus:border-yellow-400 outline-none transition-colors"
+                    />
+                    {editSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setEditSearchQuery('')}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white p-0.5"
+                      >
+                        <X size={13} />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Category Filter Pills */}
+                  <div className="flex items-center gap-1 overflow-x-auto pb-1 no-scrollbar">
+                    {editCategories.map((cat) => (
+                      <button
+                        key={cat}
+                        type="button"
+                        onClick={() => setEditCategoryFilter(cat)}
+                        className={`px-2.5 py-0.5 text-[10px] font-bold rounded-lg whitespace-nowrap transition-all ${
+                          editCategoryFilter === cat
+                            ? 'bg-yellow-400 text-black shadow-sm'
+                            : 'bg-zinc-950 border border-zinc-800 text-zinc-400 hover:text-white'
+                        }`}
+                      >
+                        {cat}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Instant-Add Menu Items Grid */}
+                <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1 border border-zinc-800/80 rounded-xl p-2 bg-zinc-950/60">
+                  {filteredEditMenuItems.length === 0 ? (
+                    <p className="text-xs text-zinc-500 text-center py-3">No menu items match your search.</p>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                      {filteredEditMenuItems.map((item) => {
+                        const inCart = editItems.find(
+                          (l) => l.menu_item_id === item.id || l.item_name.toLowerCase() === item.name.toLowerCase(),
                         );
-                      }
-                      return [
-                        ...prev,
-                        {
-                          menu_item_id: found.id,
-                          item_name: found.name,
-                          item_price: Number(found.price),
-                          quantity: 1,
-                        },
-                      ];
-                    });
-                    setSelectedAddItem('');
-                  }}
-                  disabled={!selectedAddItem}
-                  className="bg-yellow-400 hover:bg-yellow-300 disabled:opacity-40 text-black font-bold px-3 py-2 rounded-xl text-xs transition-all flex items-center gap-1"
-                >
-                  <Plus size={14} /> Add
-                </button>
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => handleAddItemToEdit(item)}
+                            className="group flex items-center justify-between p-2 rounded-xl bg-zinc-900/90 border border-zinc-800 hover:border-yellow-400/60 hover:bg-zinc-850 active:scale-[0.98] transition-all text-left"
+                          >
+                            <div className="min-w-0 flex-1 pr-2">
+                              <p className="font-bold text-xs text-white group-hover:text-yellow-400 truncate transition-colors">
+                                {item.name}
+                              </p>
+                              <p className="text-[10px] text-zinc-400 font-medium truncate">{item.category}</p>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {inCart && (
+                                <span className="text-[10px] font-black bg-yellow-400 text-black px-1.5 py-0.5 rounded-full">
+                                  {inCart.quantity}x
+                                </span>
+                              )}
+                              <span className="font-mono text-xs font-bold text-yellow-400">
+                                {formatPKR(item.price)}
+                              </span>
+                              <div className="w-5 h-5 rounded-lg bg-yellow-400/10 group-hover:bg-yellow-400 text-yellow-400 group-hover:text-black flex items-center justify-center transition-colors ml-0.5">
+                                <Plus size={12} />
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -1991,6 +2183,29 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                   </span>
                 </div>
               </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1 flex items-center gap-1">
+                  <Truck size={13} className="text-yellow-400" /> Delivery Fee
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    min="0"
+                    step="10"
+                    value={editDeliveryFee === 0 ? '' : editDeliveryFee}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value);
+                      setEditDeliveryFee(isNaN(val) ? 0 : Math.max(0, val));
+                    }}
+                    placeholder="0"
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white focus:border-yellow-400 outline-none"
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-zinc-500">
+                    PKR
+                  </span>
+                </div>
+              </div>
             </div>
 
             <div>
@@ -2020,7 +2235,8 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                 editValidDiscount = editSubtotal > 0 ? Math.round((editDiscountAmount / editSubtotal) * 100) : 0;
               }
 
-              const editTotalAmount = Math.max(0, editSubtotal - editDiscountAmount);
+              const safeEditDeliveryFee = isNaN(editDeliveryFee) || editDeliveryFee < 0 ? 0 : editDeliveryFee;
+              const editTotalAmount = Math.max(0, editSubtotal - editDiscountAmount) + safeEditDeliveryFee;
               return (
                 <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-3 space-y-1 text-xs">
                   <div className="flex justify-between text-zinc-400">
@@ -2031,6 +2247,12 @@ export default function OrderModule({ onBack }: OrderModuleProps) {
                     <div className="flex justify-between text-green-400">
                       <span>Discount {editDiscountType === 'percent' ? `(${editValidDiscount}%)` : '(Fixed Price)'}:</span>
                       <span>-{formatPKR(editDiscountAmount)}</span>
+                    </div>
+                  )}
+                  {safeEditDeliveryFee > 0 && (
+                    <div className="flex justify-between text-blue-400 font-semibold">
+                      <span>Delivery Fee:</span>
+                      <span>+{formatPKR(safeEditDeliveryFee)}</span>
                     </div>
                   )}
                   <div className="flex justify-between font-bold text-white text-sm pt-1 border-t border-zinc-800">
@@ -2386,6 +2608,12 @@ function KDSCard({
                 Discount {displayDiscountPercent > 0 ? `(${displayDiscountPercent}%)` : ''}
               </span>
               <span>-{formatPKR(displayDiscountAmount)}</span>
+            </div>
+          ) : null}
+          {order.delivery_fee && Number(order.delivery_fee) > 0 ? (
+            <div className="flex justify-between text-blue-400 font-semibold">
+              <span>Delivery Fee</span>
+              <span>+{formatPKR(Number(order.delivery_fee))}</span>
             </div>
           ) : null}
           <div className="flex justify-between text-sm font-bold text-white pt-1">
